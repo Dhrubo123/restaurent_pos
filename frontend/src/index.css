@@ -1,0 +1,29 @@
+:root {
+  color-scheme: light;
+  --text: #172525;
+  --text-h: #172525;
+  --bg: #f5f7f4;
+  --border: #e0e7e2;
+  --code-bg: #f4f3ec;
+  --mono: ui-monospace, Consolas, monospace;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  color: #172525;
+  background: #f5f7f4;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 135%;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #172525;
+  background: var(--code-bg);
+}

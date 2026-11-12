@@ -1,0 +1,14 @@
+/.cache/
+/backend/.env
+/backend/.env.testing
+/backend/vendor/
+/backend/database/*.sqlite
+/backend/node_modules/
+/frontend/node_modules/
+/frontend/.env
+/frontend/.env.local
+/frontend/.env.*.local
+/frontend/dist/
+*.log
+.DS_Store
+Thumbs.db
