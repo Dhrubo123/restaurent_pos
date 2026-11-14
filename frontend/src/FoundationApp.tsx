@@ -126,6 +126,9 @@ export default function FoundationApp() {
   const [tableDraft, setTableDraft] = useState<TableDraft | null>(null)
   const [zoneDraft, setZoneDraft] = useState<ZoneDraft | null>(null)
   const [showZones, setShowZones] = useState(false)
+  const [isOnline, setIsOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true,
+  )
 
   const canViewFloor = user?.permissions.includes('view-floor') ?? false
   const canManageFloor = user?.permissions.includes('manage-floor') ?? false
@@ -253,6 +256,47 @@ export default function FoundationApp() {
   }
 
   useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true)
+      setError('')
+      setSuccess('Wi-Fi connection restored. Syncing live POS data…')
+      if (user) {
+        void bootstrapUser(user).catch(() => {})
+      }
+    }
+    const handleOffline = () => {
+      setIsOnline(false)
+    }
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+    try {
+      localStorage.setItem(
+        'clique_pos_offline_cache_v1',
+        JSON.stringify({
+          updatedAt: new Date().toISOString(),
+          user,
+          zones,
+          orders,
+          menuCategories,
+          taxCategories,
+          modifierGroups,
+          recentInvoices,
+        }),
+      )
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [user, zones, orders, menuCategories, taxCategories, modifierGroups, recentInvoices])
+
+  useEffect(() => {
     void (async () => {
       try {
         await refreshCsrf()
@@ -262,6 +306,25 @@ export default function FoundationApp() {
       } catch (caught) {
         if (caught instanceof ApiFailure && caught.status !== 401) {
           setError(caught.message)
+        } else if (!(caught instanceof ApiFailure)) {
+          try {
+            const raw = localStorage.getItem('clique_pos_offline_cache_v1')
+            if (raw) {
+              const cached = JSON.parse(raw)
+              if (cached.user) setUser(cached.user)
+              if (cached.zones) setZones(cached.zones)
+              if (cached.orders) {
+                setOrders(cached.orders)
+                setSelectedOrder(cached.orders[0] ?? null)
+              }
+              if (cached.menuCategories) setMenuCategories(cached.menuCategories)
+              if (cached.taxCategories) setTaxCategories(cached.taxCategories)
+              if (cached.modifierGroups) setModifierGroups(cached.modifierGroups)
+              if (cached.recentInvoices) setRecentInvoices(cached.recentInvoices)
+            }
+          } catch {
+            // Ignore cache read error
+          }
         }
       } finally {
         setLoading(false)
@@ -305,7 +368,14 @@ export default function FoundationApp() {
       setFieldErrors(caught.errors)
       return
     }
-    setError('The request could not be completed.')
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setIsOnline(false)
+      setError(
+        'Wi-Fi / Internet disconnected. Active checks stay open on screen — you can still print Guest Bill Copies (Table Check) or reprint recent receipts offline, then finalize once Wi-Fi reconnects.',
+      )
+      return
+    }
+    setError('Network connection interrupted. Please check Wi-Fi or click Reconnect.')
   }
 
   const login = async (event: FormEvent) => {
@@ -399,6 +469,48 @@ export default function FoundationApp() {
       await request(`/${resource}/${id}/activation`, csrfToken, { method: active ? 'POST' : 'DELETE' })
       setSuccess(`${resource === 'tables' ? 'Table' : 'Zone'} ${active ? 'activated' : 'deactivated'} successfully.`)
       await loadFloor(true)
+    } catch (caught) {
+      handleFailure(caught)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const quickAdjustTableChairs = async (table: DiningTable, zoneId: number, delta: number) => {
+    const nextCapacity = Math.max(1, Math.min(24, table.capacity + delta))
+    if (nextCapacity === table.capacity) return
+    resetMessages()
+    setBusy(true)
+    try {
+      await request(`/tables/${table.id}`, csrfToken, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          zone_id: zoneId,
+          code: table.code,
+          display_name: table.display_name,
+          capacity: nextCapacity,
+        }),
+      })
+      await loadFloor(canManageFloor)
+    } catch (caught) {
+      handleFailure(caught)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const openTakeawayOrder = async () => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ data: OrderRecord }>('/orders/takeaway', csrfToken, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+      await Promise.all([loadOrders(result.data.id), loadFloor()])
+      setSelectedOrder(result.data)
+      setActiveTab('orders')
+      setSuccess(`Opened ${result.data.table?.display_name ?? 'Takeaway'} (${result.data.order_number}).`)
     } catch (caught) {
       handleFailure(caught)
     } finally {
@@ -1440,6 +1552,38 @@ export default function FoundationApp() {
     </aside>
 
     <main className="content">
+      {!isOnline && (
+        <div
+          className="alert"
+          role="status"
+          style={{
+            background: '#fff7ed',
+            borderColor: '#fdba74',
+            color: '#9a3412',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span>
+            <strong>⚠ Offline Mode (Wi-Fi Disconnected):</strong> Active table checks, menu prices & recent invoices remain cached on screen. You can print <strong>80mm Guest Bill Copies (Table Check)</strong> or reprint invoices right now without internet.
+          </span>
+          <button
+            type="button"
+            className="secondary compact"
+            onClick={() => {
+              if (navigator.onLine && user) {
+                setIsOnline(true)
+                void bootstrapUser(user)
+              }
+            }}
+          >
+            ↻ Reconnect & Sync
+          </button>
+        </div>
+      )}
       {error && <Alert message={error} dismiss={() => setError('')} />}
       {success && <Success message={success} dismiss={() => setSuccess('')} />}
 
@@ -1578,11 +1722,12 @@ export default function FoundationApp() {
             onCancelOrder={cancelOrder}
             onOpenCashier={canTakePayment ? () => { resetMessages(); setActiveTab('cashier'); void loadBillingData() } : undefined}
             onPrintGuestBill={(ord) => setPrintInvoice(buildGuestBillFromOrder(ord))}
+            onOpenTakeaway={canManageOrders ? openTakeawayOrder : undefined}
           />
         </>
       ) : (
         <>
-          <header><div><p className="eyebrow coral">FLOOR & TABLES</p><h1>Good service starts here.</h1><p className="muted">{user.restaurant.name} · Interactive dining room floor plan</p></div><div className="header-actions"><span className="live"><i /> Live Floor</span>{canManageFloor && <><button className="secondary compact" onClick={() => setShowZones(true)}>Manage zones</button><button className="primary compact" onClick={() => setTableDraft({ ...emptyTable, zone_id: String(zones.find((zone) => zone.active)?.id ?? '') })}>＋ Add table</button></>}</div></header>
+          <header><div><p className="eyebrow coral">FLOOR & TABLES</p><h1>Good service starts here.</h1><p className="muted">{user.restaurant.name} · Interactive dining room floor plan</p></div><div className="header-actions"><span className="live"><i /> Live Floor</span>{canManageOrders && <button className="secondary compact" disabled={busy} onClick={() => void openTakeawayOrder()}>🛍 + Takeaway / Parcel</button>}{canManageFloor && <><button className="secondary compact" onClick={() => setShowZones(true)}>Manage zones</button><button className="primary compact" onClick={() => setTableDraft({ ...emptyTable, zone_id: String(zones.find((zone) => zone.active)?.id ?? '') })}>＋ Add table</button></>}</div></header>
           <section className="summary-grid"><Summary icon="✓" tone="green" value={tables.filter((table) => table.active && table.status === 'AVAILABLE').length} label="Available" /><Summary icon="●" tone="blue" value={tables.filter((table) => table.status === 'OPEN').length} label="Occupied" /><Summary icon="◷" tone="amber" value={tables.filter((table) => table.status === 'BILL_REQUESTED' || table.status === 'PARTIALLY_PAID').length} label="Bill / Payment" /><Summary icon="#" tone="ink" value={tables.length} label="Total tables" /></section>
           {zones.length === 0 ? <EmptyState title="No zones yet" copy="Add Indoor, Outdoor, or another service zone to begin." action={canManageFloor ? () => setShowZones(true) : undefined} /> : <>
             <div className="floor-plan-bar">
@@ -1594,7 +1739,7 @@ export default function FoundationApp() {
                 <span><i className="legend-chair-icon" /> Filled Chair = Seated Guest</span>
               </div>
             </div>
-            {visibleZones.map((zone) => <section className={`zone-section floor-canvas ${zone.active ? '' : 'inactive-zone'}`} key={zone.id}><div className="zone-title"><h2>{zone.name}</h2><span>{zone.active ? `${zone.tables.length} dining tables` : 'Inactive zone'}</span></div>{zone.tables.length === 0 ? <div className="inline-empty">No tables in this zone.</div> : <div className="table-grid floor-plan-grid">{zone.tables.map((table) => <FloorTableCard key={table.id} table={table} zoneId={zone.id} canManageOrders={canManageOrders} canManageFloor={canManageFloor} busy={busy} onOpenOrder={() => void openOrFocusTableOrder(table.id, Math.min(4, table.capacity))} onEdit={() => setTableDraft({ id: table.id, zone_id: String(zone.id), code: table.code, display_name: table.display_name, capacity: table.capacity })} onToggleActive={() => void setActivation('tables', table.id, !table.active)} />)}</div>}</section>)}
+            {visibleZones.map((zone) => <section className={`zone-section floor-canvas ${zone.active ? '' : 'inactive-zone'}`} key={zone.id}><div className="zone-title"><h2>{zone.name}</h2><span>{zone.active ? `${zone.tables.length} dining tables` : 'Inactive zone'}</span></div>{zone.tables.length === 0 ? <div className="inline-empty">No tables in this zone.</div> : <div className="table-grid floor-plan-grid">{zone.tables.map((table) => <FloorTableCard key={table.id} table={table} zoneId={zone.id} canManageOrders={canManageOrders} canManageFloor={canManageFloor} busy={busy} onOpenOrder={() => void openOrFocusTableOrder(table.id, Math.min(4, table.capacity))} onEdit={() => setTableDraft({ id: table.id, zone_id: String(zone.id), code: table.code, display_name: table.display_name, capacity: table.capacity })} onToggleActive={() => void setActivation('tables', table.id, !table.active)} onAdjustChairs={(delta) => void quickAdjustTableChairs(table, zone.id, delta)} />)}</div>}</section>)}
           </>}
         </>
       )}
@@ -1623,6 +1768,7 @@ function FloorTableCard({
   onOpenOrder,
   onEdit,
   onToggleActive,
+  onAdjustChairs,
 }: {
   table: DiningTable
   zoneId: number
@@ -1632,6 +1778,7 @@ function FloorTableCard({
   onOpenOrder: () => void
   onEdit: () => void
   onToggleActive: () => void
+  onAdjustChairs: (delta: number) => void
 }) {
   const visualSeats = Math.max(2, Math.min(8, table.capacity))
   const occupiedGuests = table.order ? Math.min(visualSeats, table.order.guest_count) : 0
@@ -1734,6 +1881,22 @@ function FloorTableCard({
         )}
         {canManageFloor && (
           <div className="card-actions">
+            <button
+              type="button"
+              disabled={busy || table.capacity <= 1}
+              onClick={() => onAdjustChairs(-1)}
+              title="Remove 1 chair"
+            >
+              − Chair
+            </button>
+            <button
+              type="button"
+              disabled={busy || table.capacity >= 24}
+              onClick={() => onAdjustChairs(1)}
+              title="Add 1 extra chair"
+            >
+              ＋ Chair
+            </button>
             <button onClick={onEdit}>Edit</button>
             <button
               className={table.active ? 'danger-link' : 'activate-link'}

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { printThermalPaper } from './InvoicePrintModal.tsx'
 
 export type KotLineRecord = {
   id: number
@@ -50,19 +51,23 @@ type Props = {
 }
 
 export default function KotPrintModal({ kots, busy, onClose, onReprint }: Props) {
-  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [selectedIndex, setSelectedIndex] = useState<number | 'ALL'>(kots.length > 1 ? 'ALL' : 0)
   const [reprintReason, setReprintReason] = useState('')
   const [showReprintForm, setShowReprintForm] = useState(false)
+  const paperWrapRef = useRef<HTMLDivElement | null>(null)
 
-  const currentKot = kots[selectedIndex] ?? kots[0]
+  const currentKot = selectedIndex === 'ALL' ? kots[0] : (kots[selectedIndex] ?? kots[0])
   if (!currentKot) return null
 
-  const totalQty = currentKot.items
-    .filter((i) => i.status !== 'CANCELLED')
-    .reduce((sum, i) => sum + Math.max(0, Number(i.quantity) - Number(i.cancelled_quantity)), 0)
+  const kotsToRender = selectedIndex === 'ALL' ? kots : [currentKot]
 
   const handleBrowserPrint = () => {
-    window.print()
+    printThermalPaper(
+      paperWrapRef.current,
+      selectedIndex === 'ALL' && kots.length > 1
+        ? `KOT All Stations (${kots.map((k) => k.kot_number).join(' + ')})`
+        : `${currentKot.kot_number} · ${currentKot.station}`,
+    )
   }
 
   const submitReprint = async (event: FormEvent) => {
@@ -72,7 +77,12 @@ export default function KotPrintModal({ kots, busy, onClose, onReprint }: Props)
     if (updated) {
       setShowReprintForm(false)
       setReprintReason('')
-      setTimeout(() => window.print(), 150)
+      setTimeout(() => {
+        printThermalPaper(
+          paperWrapRef.current,
+          `${currentKot.kot_number} · ${currentKot.station} (Reprint)`,
+        )
+      }, 120)
     }
   }
 
@@ -95,6 +105,16 @@ export default function KotPrintModal({ kots, busy, onClose, onReprint }: Props)
 
         {kots.length > 1 && (
           <div className="kot-slip-switcher no-print">
+            <button
+              type="button"
+              className={selectedIndex === 'ALL' ? 'active' : ''}
+              onClick={() => {
+                setSelectedIndex('ALL')
+                setShowReprintForm(false)
+              }}
+            >
+              All Tickets ({kots.length})
+            </button>
             {kots.map((k, idx) => (
               <button
                 key={k.id}
@@ -111,102 +131,114 @@ export default function KotPrintModal({ kots, busy, onClose, onReprint }: Props)
           </div>
         )}
 
-        <div className="kot-paper-wrap">
-          <article className="kot-paper" aria-label="80mm KOT thermal slip">
-            {currentKot.reprint_count > 0 && (
-              <div className="kot-paper-reprint-banner">
-                <strong>*** REPRINT #{currentKot.reprint_count} — DO NOT DOUBLE PREPARE ***</strong>
-                {currentKot.last_reprint_reason && <span>Reason: {currentKot.last_reprint_reason}</span>}
-              </div>
-            )}
+        <div className="kot-paper-wrap" ref={paperWrapRef}>
+          {kotsToRender.map((kot, kotIdx) => {
+            const totalQty = kot.items
+              .filter((i) => i.status !== 'CANCELLED')
+              .reduce((sum, i) => sum + Math.max(0, Number(i.quantity) - Number(i.cancelled_quantity)), 0)
 
-            {currentKot.status === 'CANCELLED' && (
-              <div className="kot-paper-void-banner">
-                <strong>*** CANCELLED TICKET — DO NOT PREPARE ***</strong>
-              </div>
-            )}
-
-            <div className="kot-paper-station">[{currentKot.station} KOT]</div>
-
-            <div className="kot-paper-hero">
-              <div>
-                <span className="kot-paper-label">TABLE</span>
-                <strong className="kot-paper-table">
-                  {currentKot.table?.code ?? 'TBL'} ({currentKot.table?.display_name ?? 'Table'})
-                </strong>
-                <span className="kot-paper-sub">{currentKot.table?.zone ?? 'Dining'}</span>
-              </div>
-              <div className="kot-paper-right">
-                <strong className="kot-paper-number">{currentKot.kot_number}</strong>
-                <span className="kot-paper-round">ROUND #{currentKot.round_number}</span>
-              </div>
-            </div>
-
-            <div className="kot-paper-meta">
-              <div>
-                <span>Order: {currentKot.order_number ?? `#${currentKot.order_id}`}</span>
-                <span>Guests: {currentKot.guest_count}</span>
-              </div>
-              <div>
-                <span>Waiter: {currentKot.waiter_name ?? 'Staff'}</span>
-                <span>Sent: {new Date(currentKot.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-              </div>
-            </div>
-
-            <div className="kot-paper-divider">======================================</div>
-            <div className="kot-paper-colhead">
-              <span>QTY</span>
-              <span>ITEM & PREPARATION NOTES</span>
-            </div>
-            <div className="kot-paper-divider">--------------------------------------</div>
-
-            <div className="kot-paper-items">
-              {currentKot.items.map((item) => {
-                const qty = Number(item.quantity)
-                const isCancelled = item.status === 'CANCELLED'
-                return (
-                  <div key={item.id} className={`kot-paper-line ${isCancelled ? 'kot-line-cancelled' : ''}`}>
-                    <div className="kot-paper-line-row">
-                      <strong className="kot-paper-qty">{isCancelled ? `-${qty}x` : `${qty}x`}</strong>
-                      <div className="kot-paper-item-body">
-                        <strong className="kot-paper-item-name">
-                          {item.item_name}
-                          {item.variant_name ? ` (${item.variant_name})` : ''}
-                        </strong>
-                        {item.modifiers && item.modifiers.length > 0 && (
-                          <ul className="kot-paper-mods">
-                            {item.modifiers.map((m, idx) => (
-                              <li key={idx}>+ {m.name}</li>
-                            ))}
-                          </ul>
-                        )}
-                        {item.note && <div className="kot-paper-note">* NOTE: {item.note}</div>}
-                        {isCancelled && (
-                          <div className="kot-paper-cancel-tag">
-                            [CANCELLED: {item.cancel_reason ?? 'Authorized void'}]
-                          </div>
-                        )}
-                      </div>
-                    </div>
+            return (
+              <article
+                key={kot.id}
+                className={`kot-paper ${kotIdx > 0 ? 'kot-paper-second-copy' : ''}`}
+                aria-label="80mm KOT thermal slip"
+              >
+                {kot.reprint_count > 0 && (
+                  <div className="kot-paper-reprint-banner">
+                    <strong>*** REPRINT #{kot.reprint_count} — DO NOT DOUBLE PREPARE ***</strong>
+                    {kot.last_reprint_reason && <span>Reason: {kot.last_reprint_reason}</span>}
                   </div>
-                )
-              })}
-            </div>
+                )}
 
-            {currentKot.order_note && (
-              <>
+                {kot.status === 'CANCELLED' && (
+                  <div className="kot-paper-void-banner">
+                    <strong>*** CANCELLED TICKET — DO NOT PREPARE ***</strong>
+                  </div>
+                )}
+
+                <div className="kot-paper-station">[{kot.station} KOT]</div>
+
+                <div className="kot-paper-hero">
+                  <div>
+                    <span className="kot-paper-label">TABLE</span>
+                    <strong className="kot-paper-table">
+                      {kot.table?.code ?? 'TBL'} ({kot.table?.display_name ?? 'Table'})
+                    </strong>
+                    <span className="kot-paper-sub">{kot.table?.zone ?? 'Dining'}</span>
+                  </div>
+                  <div className="kot-paper-right">
+                    <strong className="kot-paper-number">{kot.kot_number}</strong>
+                    <span className="kot-paper-round">ROUND #{kot.round_number}</span>
+                  </div>
+                </div>
+
+                <div className="kot-paper-meta">
+                  <div>
+                    <span>Order: {kot.order_number ?? `#${kot.order_id}`}</span>
+                    <span>Guests: {kot.guest_count}</span>
+                  </div>
+                  <div>
+                    <span>Waiter: {kot.waiter_name ?? 'Staff'}</span>
+                    <span>Sent: {new Date(kot.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                </div>
+
+                <div className="kot-paper-divider">======================================</div>
+                <div className="kot-paper-colhead">
+                  <span>QTY</span>
+                  <span>ITEM & PREPARATION NOTES</span>
+                </div>
                 <div className="kot-paper-divider">--------------------------------------</div>
-                <div className="kot-paper-order-note">ORDER NOTE: {currentKot.order_note}</div>
-              </>
-            )}
 
-            <div className="kot-paper-divider">======================================</div>
-            <div className="kot-paper-footer">
-              <span>Total {currentKot.station} Qty: {totalQty}</span>
-              <span>NO PRICES — KITCHEN COPY</span>
-            </div>
-            <div className="receipt-dev-credit">Developed by Tech Base</div>
-          </article>
+                <div className="kot-paper-items">
+                  {kot.items.map((item) => {
+                    const qty = Number(item.quantity)
+                    const isCancelled = item.status === 'CANCELLED'
+                    return (
+                      <div key={item.id} className={`kot-paper-line ${isCancelled ? 'kot-line-cancelled' : ''}`}>
+                        <div className="kot-paper-line-row">
+                          <strong className="kot-paper-qty">{isCancelled ? `-${qty}x` : `${qty}x`}</strong>
+                          <div className="kot-paper-item-body">
+                            <strong className="kot-paper-item-name">
+                              {item.item_name}
+                              {item.variant_name ? ` (${item.variant_name})` : ''}
+                            </strong>
+                            {item.modifiers && item.modifiers.length > 0 && (
+                              <ul className="kot-paper-mods">
+                                {item.modifiers.map((m, idx) => (
+                                  <li key={idx}>+ {m.name}</li>
+                                ))}
+                              </ul>
+                            )}
+                            {item.note && <div className="kot-paper-note">* NOTE: {item.note}</div>}
+                            {isCancelled && (
+                              <div className="kot-paper-cancel-tag">
+                                [CANCELLED: {item.cancel_reason ?? 'Authorized void'}]
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {kot.order_note && (
+                  <>
+                    <div className="kot-paper-divider">--------------------------------------</div>
+                    <div className="kot-paper-order-note">ORDER NOTE: {kot.order_note}</div>
+                  </>
+                )}
+
+                <div className="kot-paper-divider">======================================</div>
+                <div className="kot-paper-footer">
+                  <span>Total {kot.station} Qty: {totalQty}</span>
+                  <span>NO PRICES — KITCHEN COPY</span>
+                </div>
+                <div className="receipt-dev-credit">Developed by Tech Base</div>
+              </article>
+            )
+          })}
         </div>
 
         {showReprintForm && onReprint ? (

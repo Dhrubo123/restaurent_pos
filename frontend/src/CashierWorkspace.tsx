@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { InvoiceRecord } from './InvoicePrintModal.tsx'
+import { printThermalPaper, type InvoiceRecord } from './InvoicePrintModal.tsx'
 import type { OrderRecord } from './OrderWorkspace.tsx'
 
 export type CashierShiftRecord = {
@@ -106,6 +106,9 @@ export default function CashierWorkspace({
     value: string
     reason: string
   } | null>(null)
+  const [showZReportModal, setShowZReportModal] = useState(false)
+  const zReportWrapRef = useRef<HTMLDivElement | null>(null)
+  const activeOrLatestShift = currentShift ?? recentShifts[0] ?? null
 
   const balanceDue = Number(selectedOrder?.balance_due ?? 0)
 
@@ -198,6 +201,25 @@ export default function CashierWorkspace({
           <p className="muted">{restaurantName} · Split tender, cash change & sequential fiscal invoices</p>
         </div>
         <div className="header-actions">
+          {(currentShift || recentShifts.length > 0 || recentInvoices.length > 0) && (
+            <button
+              type="button"
+              className="secondary compact"
+              onClick={() => setShowZReportModal(true)}
+            >
+              🖨 80mm Closing Slip
+            </button>
+          )}
+          {recentInvoices.length > 0 && (
+            <button
+              type="button"
+              className="secondary compact"
+              onClick={() => onViewInvoice(recentInvoices[0])}
+              title="Printer jammed or paper empty? Instantly reopen and reprint the last finalized invoice"
+            >
+              🖨 Reprint Last Invoice ({recentInvoices[0].invoice_number})
+            </button>
+          )}
           {currentShift ? (
             <>
               <span className="live">
@@ -761,6 +783,127 @@ export default function CashierWorkspace({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {showZReportModal && (
+        <div className="modal-backdrop print-backdrop" onMouseDown={() => setShowZReportModal(false)}>
+          <div className="kot-print-dialog" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="kot-print-toolbar no-print">
+              <div>
+                <p className="eyebrow coral">80MM THERMAL CLOSING SLIP (Z-REPORT)</p>
+                <h3>{activeOrLatestShift ? `Shift #${activeOrLatestShift.id} · ${activeOrLatestShift.cashier_name}` : 'Daily Cashier Summary'}</h3>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setShowZReportModal(false)}>
+                ×
+              </button>
+            </div>
+
+            <div className="kot-paper-wrap" ref={zReportWrapRef}>
+              <article className="kot-paper" aria-label="80mm Z-Report Closing Slip">
+                <div className="kot-paper-station">[{restaurantName.toUpperCase()}]</div>
+                <div className="receipt-subhead">80MM SHIFT / DAILY CLOSING SLIP</div>
+                <div className="receipt-copy-pill">OFFICIAL Z-REPORT SUMMARY</div>
+                <div className="kot-paper-divider">======================================</div>
+
+                <div className="kot-paper-meta">
+                  <div>
+                    <span>Printed: {new Date().toLocaleDateString()}</span>
+                    <span>Time: {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                  <div>
+                    <span>Shift: {activeOrLatestShift ? `#${activeOrLatestShift.id} (${activeOrLatestShift.status})` : 'N/A'}</span>
+                    <span>Cashier: {activeOrLatestShift?.cashier_name ?? 'All Staff'}</span>
+                  </div>
+                </div>
+
+                {activeOrLatestShift && (
+                  <>
+                    <div className="kot-paper-divider">--------------------------------------</div>
+                    <div className="kot-paper-totals">
+                      <div className="kot-total-row">
+                        <span>Opening Drawer Float</span>
+                        <span>৳{Number(activeOrLatestShift.opening_float).toFixed(2)}</span>
+                      </div>
+                      <div className="kot-total-row">
+                        <span>Cash Sales Captured</span>
+                        <span>৳{Number(activeOrLatestShift.totals_by_method.CASH).toFixed(2)}</span>
+                      </div>
+                      <div className="kot-total-row">
+                        <span>Card Sales Captured</span>
+                        <span>৳{Number(activeOrLatestShift.totals_by_method.CARD).toFixed(2)}</span>
+                      </div>
+                      <div className="kot-total-row">
+                        <span>bKash Sales Captured</span>
+                        <span>৳{Number(activeOrLatestShift.totals_by_method.BKASH).toFixed(2)}</span>
+                      </div>
+                      <div className="kot-total-row">
+                        <span>Nagad Sales Captured</span>
+                        <span>৳{Number(activeOrLatestShift.totals_by_method.NAGAD).toFixed(2)}</span>
+                      </div>
+                      <div className="kot-total-row kot-grand-total">
+                        <strong>TOTAL SHIFT SALES</strong>
+                        <strong>৳{Number(activeOrLatestShift.totals_by_method.TOTAL).toFixed(2)}</strong>
+                      </div>
+                      <div className="kot-total-row">
+                        <span>Expected Cash in Drawer</span>
+                        <strong>৳{Number(activeOrLatestShift.expected_cash).toFixed(2)}</strong>
+                      </div>
+                      {activeOrLatestShift.counted_cash !== null && (
+                        <>
+                          <div className="kot-total-row">
+                            <span>Counted Physical Cash</span>
+                            <span>৳{Number(activeOrLatestShift.counted_cash).toFixed(2)}</span>
+                          </div>
+                          <div className="kot-total-row">
+                            <span>Drawer Variance</span>
+                            <strong>৳{Number(activeOrLatestShift.variance ?? 0).toFixed(2)}</strong>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                <div className="kot-paper-divider">--------------------------------------</div>
+                <div className="kot-paper-totals">
+                  <div className="kot-total-row">
+                    <span>Recent Finalized Invoices</span>
+                    <span>{recentInvoices.length}</span>
+                  </div>
+                  <div className="kot-total-row">
+                    <span>Open Unsettled Checks</span>
+                    <span>{orders.length}</span>
+                  </div>
+                </div>
+
+                <div className="kot-paper-divider">======================================</div>
+                <div className="kot-paper-footer">
+                  <span>Manager Sign: ___________________</span>
+                  <span>{restaurantName}</span>
+                </div>
+                <div className="receipt-dev-credit">Developed by Tech Base</div>
+              </article>
+            </div>
+
+            <div className="modal-actions no-print">
+              <button type="button" className="secondary" onClick={() => setShowZReportModal(false)}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() =>
+                  printThermalPaper(
+                    zReportWrapRef.current,
+                    `${restaurantName} · 80mm Closing Slip`,
+                  )
+                }
+              >
+                🖨 Print 80mm Closing Slip
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>

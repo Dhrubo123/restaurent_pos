@@ -7,6 +7,7 @@ use App\Models\DiningTable;
 use App\Models\Order;
 use App\Models\OrderMerge;
 use App\Models\TableTransfer;
+use App\Models\Zone;
 use App\Support\Audit;
 use App\Support\Idempotency;
 use App\Support\OrderTotals;
@@ -105,6 +106,106 @@ class OrderController extends Controller
 
                 return response()->json(['data' => $this->loadOrderDetails($order)], 201);
             });
+        });
+    }
+
+    public function openTakeaway(Request $request): JsonResponse
+    {
+        Gate::authorize('manage-orders');
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'customer_note' => ['nullable', 'string', 'max:200'],
+        ]);
+
+        return DB::transaction(function () use ($request, $user, $validated) {
+            $zone = Zone::query()->firstOrCreate(
+                [
+                    'restaurant_id' => $user->restaurant_id,
+                    'name' => 'Takeaway / Parcel',
+                ],
+                [
+                    'sort_order' => 99,
+                    'active' => true,
+                ],
+            );
+
+            if (! $zone->active) {
+                $zone->update(['active' => true]);
+            }
+
+            $takeawayTable = null;
+            for ($slot = 1; $slot <= 50; $slot++) {
+                $code = sprintf('TK-%d', $slot);
+                $candidate = DiningTable::query()
+                    ->where('restaurant_id', $user->restaurant_id)
+                    ->where('code', $code)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $candidate) {
+                    $maxSort = (int) DiningTable::query()
+                        ->where('restaurant_id', $user->restaurant_id)
+                        ->max('sort_order');
+
+                    $candidate = DiningTable::query()->create([
+                        'restaurant_id' => $user->restaurant_id,
+                        'zone_id' => $zone->id,
+                        'code' => $code,
+                        'display_name' => sprintf('Takeaway #%d', $slot),
+                        'capacity' => 2,
+                        'sort_order' => $maxSort + 1,
+                        'active' => true,
+                    ]);
+                } elseif (! $candidate->active) {
+                    $candidate->update(['active' => true, 'zone_id' => $zone->id]);
+                }
+
+                $hasOpen = $candidate->orders()
+                    ->whereIn('status', Order::OPEN_STATUSES)
+                    ->exists();
+
+                if (! $hasOpen) {
+                    $takeawayTable = $candidate;
+                    break;
+                }
+            }
+
+            abort_if(! $takeawayTable, 409, 'All takeaway slots are currently in use.');
+
+            $nextNumber = Order::query()->where('restaurant_id', $user->restaurant_id)->count() + 1;
+            $orderNumber = sprintf('ORD-%04d', $nextNumber);
+
+            while (Order::query()->where('restaurant_id', $user->restaurant_id)->where('order_number', $orderNumber)->exists()) {
+                $nextNumber++;
+                $orderNumber = sprintf('ORD-%04d', $nextNumber);
+            }
+
+            $customerNote = trim((string) ($validated['customer_note'] ?? ''));
+            $note = $customerNote !== '' ? "TAKEAWAY / PARCEL · {$customerNote}" : 'TAKEAWAY / PARCEL';
+
+            $order = Order::query()->create([
+                'restaurant_id' => $user->restaurant_id,
+                'dining_table_id' => $takeawayTable->id,
+                'order_number' => $orderNumber,
+                'status' => 'OPEN',
+                'waiter_id' => $user->id,
+                'guest_count' => 1,
+                'version' => 1,
+                'note' => $note,
+                'subtotal' => 0,
+                'discount_amount' => 0,
+                'service_charge' => 0,
+                'tax_amount' => 0,
+                'total' => 0,
+                'paid_amount' => 0,
+                'balance_due' => 0,
+                'opened_at' => now(),
+            ]);
+
+            Audit::record($request, 'order.takeaway_opened', $order, after: $order->toArray());
+
+            return response()->json(['data' => $this->loadOrderDetails($order)], 201);
         });
     }
 

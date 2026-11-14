@@ -154,6 +154,7 @@ type Props = {
   onCancelOrder: (order: OrderRecord, reason: string) => Promise<boolean>
   onOpenCashier?: () => void
   onPrintGuestBill?: (order: OrderRecord) => void
+  onOpenTakeaway?: () => Promise<void>
 }
 
 export default function OrderWorkspace({
@@ -178,6 +179,7 @@ export default function OrderWorkspace({
   onCancelOrder,
   onOpenCashier,
   onPrintGuestBill,
+  onOpenTakeaway,
 }: Props) {
   const [selectedCategory, setSelectedCategory] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
@@ -343,34 +345,58 @@ export default function OrderWorkspace({
             </button>
           ))}
         </div>
-        <button
-          className="primary compact"
-          onClick={() => {
-            setNewTableId(String(availableTables[0]?.id ?? ''))
-            setNewGuestCount(2)
-            setShowOpenTableModal(true)
-          }}
-        >
-          ＋ New table order
-        </button>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {onOpenTakeaway && (
+            <button
+              type="button"
+              className="secondary compact"
+              disabled={busy}
+              onClick={() => void onOpenTakeaway()}
+            >
+              🛍 + Takeaway / Parcel
+            </button>
+          )}
+          <button
+            className="primary compact"
+            onClick={() => {
+              setNewTableId(String(availableTables[0]?.id ?? ''))
+              setNewGuestCount(2)
+              setShowOpenTableModal(true)
+            }}
+          >
+            ＋ New table order
+          </button>
+        </div>
       </div>
 
       {!selectedOrder ? (
         <section className="empty-state">
           <div>▤</div>
           <h2>No active check selected</h2>
-          <p>Tap an open table on the Floor or start a new table order to begin composing items.</p>
-          {availableTables.length > 0 && (
-            <button
-              className="primary compact"
-              onClick={() => {
-                setNewTableId(String(availableTables[0]?.id ?? ''))
-                setShowOpenTableModal(true)
-              }}
-            >
-              ＋ Open a table
-            </button>
-          )}
+          <p>Tap an open table on the Floor, start a Takeaway / Parcel order, or open a dining table.</p>
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+            {onOpenTakeaway && (
+              <button
+                type="button"
+                className="secondary compact"
+                disabled={busy}
+                onClick={() => void onOpenTakeaway()}
+              >
+                🛍 + Takeaway / Parcel
+              </button>
+            )}
+            {availableTables.length > 0 && (
+              <button
+                className="primary compact"
+                onClick={() => {
+                  setNewTableId(String(availableTables[0]?.id ?? ''))
+                  setShowOpenTableModal(true)
+                }}
+              >
+                ＋ Open a table
+              </button>
+            )}
+          </div>
         </section>
       ) : (
         <div className="pos-split">
@@ -727,14 +753,26 @@ export default function OrderWorkspace({
                   </button>
                 )
               ) : (
-                <button
-                  type="button"
-                  className={unsentCount > 0 ? 'secondary ticket-primary-cta' : 'primary ticket-primary-cta'}
-                  disabled={busy || activeItems.length === 0}
-                  onClick={() => void onRequestBill(selectedOrder)}
-                >
-                  Request Bill · ৳{Number(selectedOrder.total).toFixed(2)}
-                </button>
+                <div style={{ display: 'grid', gridTemplateColumns: onOpenCashier ? '1fr 1fr' : '1fr', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="secondary ticket-primary-cta"
+                    disabled={busy || activeItems.length === 0}
+                    onClick={() => void onRequestBill(selectedOrder)}
+                  >
+                    Request Bill
+                  </button>
+                  {onOpenCashier && (
+                    <button
+                      type="button"
+                      className={unsentCount > 0 ? 'secondary ticket-primary-cta' : 'primary ticket-primary-cta'}
+                      disabled={busy || activeItems.length === 0}
+                      onClick={onOpenCashier}
+                    >
+                      ৳ Pay / Settle Now · ৳{Number(selectedOrder.total).toFixed(0)} →
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </aside>

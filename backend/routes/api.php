@@ -80,6 +80,7 @@ Route::prefix('v1')->middleware('web')->group(function () {
 
         Route::middleware('can:manage-orders')->group(function () {
             Route::get('/orders', [OrderController::class, 'index']);
+            Route::post('/orders/takeaway', [OrderController::class, 'openTakeaway']);
             Route::post('/tables/{diningTable}/orders', [OrderController::class, 'openForTable']);
             Route::get('/orders/{order}', [OrderController::class, 'show']);
             Route::patch('/orders/{order}', [OrderController::class, 'update']);

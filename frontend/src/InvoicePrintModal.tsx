@@ -1,6 +1,177 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { OrderRecord } from './OrderWorkspace.tsx'
+
+export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'Clique Cafe 80mm Slip'): void {
+  const isMobileOrTablet =
+    typeof navigator !== 'undefined' &&
+    (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 1 && window.innerWidth <= 1280))
+
+  if (!paperWrapEl || isMobileOrTablet) {
+    const prevTitle = document.title
+    document.title = docTitle
+    window.print()
+    setTimeout(() => {
+      document.title = prevTitle
+    }, 500)
+    return
+  }
+
+  const iframe = document.createElement('iframe')
+  iframe.style.position = 'fixed'
+  iframe.style.right = '0'
+  iframe.style.bottom = '0'
+  iframe.style.width = '0'
+  iframe.style.height = '0'
+  iframe.style.border = '0'
+  document.body.appendChild(iframe)
+
+  const doc = iframe.contentWindow?.document
+  if (!doc) {
+    document.body.removeChild(iframe)
+    window.print()
+    return
+  }
+
+  doc.open()
+  doc.write(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${docTitle}</title>
+  <style>
+    @page { size: 80mm auto; margin: 0; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      color: #000;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .kot-paper {
+      width: 76mm;
+      margin: 0 auto;
+      padding: 4mm 3mm;
+      background: #fff;
+      color: #000;
+    }
+    .kot-paper-second-copy {
+      page-break-before: always;
+      break-before: page;
+      margin-top: 6mm;
+      padding-top: 6mm;
+      border-top: 2px dashed #000;
+    }
+    .kot-paper-reprint-banner, .kot-paper-void-banner {
+      display: grid;
+      gap: 2px;
+      margin-bottom: 8px;
+      padding: 6px;
+      border: 2px solid #000;
+      text-align: center;
+      font-weight: 700;
+    }
+    .kot-paper-station {
+      margin-bottom: 6px;
+      text-align: center;
+      font-size: 15px;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+    }
+    .kot-paper-hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .kot-paper-hero > div { display: grid; gap: 1px; }
+    .kot-paper-label { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; }
+    .kot-paper-table { font-size: 16px; line-height: 1.15; }
+    .kot-paper-sub { font-size: 10px; }
+    .kot-paper-right { text-align: right; }
+    .kot-paper-number { font-size: 14px; }
+    .kot-paper-round { font-size: 10px; font-weight: 700; }
+    .kot-paper-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2px 8px;
+      margin-bottom: 6px;
+      font-size: 10px;
+    }
+    .kot-paper-meta > div { display: grid; }
+    .kot-paper-meta > div:last-child { text-align: right; }
+    .kot-paper-divider {
+      overflow: hidden;
+      white-space: nowrap;
+      letter-spacing: -0.06em;
+    }
+    .kot-paper-colhead, .receipt-colhead {
+      display: grid;
+      grid-template-columns: 32px 1fr 68px;
+      padding: 3px 0;
+      font-size: 10px;
+      font-weight: 900;
+    }
+    .kot-paper-colhead { grid-template-columns: 34px 1fr; }
+    .kot-paper-items { display: grid; gap: 7px; padding: 7px 0; }
+    .kot-paper-line { display: grid; gap: 2px; }
+    .kot-paper-line-row { display: grid; grid-template-columns: 34px 1fr; }
+    .receipt-line-row { display: grid; grid-template-columns: 32px 1fr 68px; align-items: start; }
+    .kot-paper-qty { font-size: 13px; }
+    .kot-paper-item-body { display: grid; gap: 2px; }
+    .kot-paper-item-name { font-size: 13px; line-height: 1.2; }
+    .kot-paper-mods { margin: 1px 0 0; padding-left: 14px; font-size: 10px; }
+    .kot-paper-note { font-size: 10px; font-weight: 700; }
+    .kot-line-cancelled { text-decoration: line-through; opacity: 0.65; }
+    .kot-paper-cancel-tag { font-size: 10px; font-weight: 900; }
+    .kot-paper-order-note { padding: 6px 0; font-size: 11px; font-weight: 800; }
+    .receipt-totals { display: grid; gap: 4px; padding: 6px 0; font-size: 11px; }
+    .receipt-totals > div { display: flex; justify-content: space-between; gap: 8px; }
+    .receipt-grand-total {
+      margin-top: 4px;
+      padding-top: 5px;
+      border-top: 1px dashed #000;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .kot-paper-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 5px;
+      font-size: 10px;
+      font-weight: 900;
+    }
+    .receipt-dev-credit {
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px dotted #444;
+      text-align: center;
+      font-size: 9.5px;
+      font-weight: 800;
+    }
+  </style>
+</head>
+<body>${paperWrapEl.innerHTML}</body>
+</html>`)
+  doc.close()
+
+  setTimeout(() => {
+    try {
+      iframe.contentWindow?.focus()
+      iframe.contentWindow?.print()
+    } finally {
+      setTimeout(() => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe)
+      }, 2000)
+    }
+  }, 60)
+}
 
 export type InvoiceItemRecord = {
   id: number
@@ -142,9 +313,10 @@ export default function InvoicePrintModal({
   const [copyMode, setCopyMode] = useState<CopyMode>(isProformaBill ? 'COUNTER' : 'BOTH')
   const [reprintReason, setReprintReason] = useState('')
   const [showReprintForm, setShowReprintForm] = useState(false)
+  const paperWrapRef = useRef<HTMLDivElement | null>(null)
 
   const handlePrint = () => {
-    window.print()
+    printThermalPaper(paperWrapRef.current, `${invoice.invoice_number} - ${restaurantName}`)
   }
 
   const submitReprint = async (event: FormEvent) => {
@@ -154,7 +326,7 @@ export default function InvoicePrintModal({
     if (updated) {
       setShowReprintForm(false)
       setReprintReason('')
-      setTimeout(() => window.print(), 150)
+      setTimeout(() => printThermalPaper(paperWrapRef.current, `${invoice.invoice_number} - Reprint`), 120)
     }
   }
 
@@ -209,7 +381,7 @@ export default function InvoicePrintModal({
           </div>
         )}
 
-        <div className="kot-paper-wrap" style={{ gap: '20px' }}>
+        <div ref={paperWrapRef} className="kot-paper-wrap" style={{ gap: '20px' }}>
           {copiesToRender.map((whichCopy, copyIdx) => (
             <article
               key={whichCopy}
