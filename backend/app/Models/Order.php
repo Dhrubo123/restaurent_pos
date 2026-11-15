@@ -12,7 +12,7 @@ class Order extends Model
     public const OPEN_STATUSES = ['OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID'];
 
     protected $fillable = [
-        'restaurant_id', 'dining_table_id', 'order_number', 'status', 'waiter_id', 'guest_count',
+        'restaurant_id', 'dining_table_id', 'merged_dining_table_ids', 'order_number', 'status', 'waiter_id', 'guest_count',
         'version', 'note', 'subtotal', 'discount_amount', 'service_charge', 'tax_amount',
         'total', 'paid_amount', 'balance_due', 'opened_at', 'closed_at',
     ];
@@ -27,6 +27,7 @@ class Order extends Model
             'total' => 'decimal:2',
             'paid_amount' => 'decimal:2',
             'balance_due' => 'decimal:2',
+            'merged_dining_table_ids' => 'array',
             'opened_at' => 'datetime',
             'closed_at' => 'datetime',
         ];

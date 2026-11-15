@@ -17,24 +17,40 @@ class FloorController extends Controller
             ->where('restaurant_id', $request->user()->restaurant_id)
             ->when(! $includeInactive, fn ($query) => $query->where('active', true))
             ->with(['tables' => fn ($query) => $query
-                ->with(['orders' => fn ($orders) => $orders
-                    ->whereIn('status', Order::OPEN_STATUSES)
-                    ->with('waiter:id,name')
-                    ->withCount(['items' => fn ($iq) => $iq->where('status', '!=', 'CANCELLED')])
-                    ->latest('opened_at')])
                 ->orderBy('sort_order')
                 ->orderBy('id')])
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get();
 
+        $openOrders = Order::query()
+            ->where('restaurant_id', $request->user()->restaurant_id)
+            ->whereIn('status', Order::OPEN_STATUSES)
+            ->with('waiter:id,name')
+            ->withCount(['items' => fn ($query) => $query->where('status', '!=', 'CANCELLED')])
+            ->latest('opened_at')
+            ->get();
+
+        $orderForTable = [];
+        foreach ($openOrders as $order) {
+            $tableIds = $order->merged_dining_table_ids;
+            $tableIds = is_array($tableIds) && $tableIds !== [] ? $tableIds : [$order->dining_table_id];
+
+            foreach ($tableIds as $tableId) {
+                $orderForTable[(int) $tableId] = $order;
+            }
+        }
+
         return response()->json(['data' => $zones->map(fn (Zone $zone) => [
             'id' => $zone->id,
             'name' => $zone->name,
             'active' => $zone->active,
-            'tables' => $zone->tables->map(function ($table) {
-                $order = $table->orders->first();
+            'tables' => $zone->tables->map(function ($table) use ($orderForTable) {
+                /** @var Order|null $order */
+                $order = $orderForTable[$table->id] ?? null;
                 $status = ! $table->active ? 'INACTIVE' : ($order?->status ?? 'AVAILABLE');
+                $groupTableIds = $order?->merged_dining_table_ids;
+                $groupTableIds = is_array($groupTableIds) && $groupTableIds !== [] ? array_values(array_map('intval', $groupTableIds)) : ($order ? [$order->dining_table_id] : []);
 
                 return [
                     'id' => $table->id,
@@ -53,6 +69,8 @@ class FloorController extends Controller
                         'waiter_name' => $order->waiter?->name,
                         'opened_at' => $order->opened_at,
                         'version' => $order->version,
+                        'group_table_ids' => $groupTableIds,
+                        'group_primary_table_id' => $order->dining_table_id,
                     ] : null,
                 ];
             })->values(),

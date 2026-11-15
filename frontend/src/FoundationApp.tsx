@@ -45,6 +45,8 @@ type DiningTable = {
     waiter_name?: string
     opened_at: string
     version: number
+    group_table_ids: number[]
+    group_primary_table_id: number
   }
 }
 
@@ -126,6 +128,7 @@ export default function FoundationApp() {
   const [tableDraft, setTableDraft] = useState<TableDraft | null>(null)
   const [zoneDraft, setZoneDraft] = useState<ZoneDraft | null>(null)
   const [showZones, setShowZones] = useState(false)
+  const [showTableGroup, setShowTableGroup] = useState(false)
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true,
   )
@@ -837,6 +840,46 @@ export default function FoundationApp() {
     } catch (caught) {
       handleFailure(caught)
       return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const saveTableGroup = async (order: NonNullable<DiningTable['order']>, tableIds: number[]) => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ data: OrderRecord }>(`/orders/${order.id}/merge-tables`, csrfToken, {
+        method: 'POST',
+        body: JSON.stringify({ version: order.version, table_ids: tableIds }),
+      })
+      setShowTableGroup(false)
+      setSelectedOrder(result.data)
+      setSuccess(`Combined ${tableIds.length} tables under ${result.data.order_number}.`)
+      await Promise.all([loadFloor(), loadOrders(result.data.id)])
+    } catch (caught) {
+      handleFailure(caught)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const releaseTableFromGroup = async (table: DiningTable) => {
+    if (!table.order || table.order.group_primary_table_id === table.id) {
+      return
+    }
+
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ data: OrderRecord }>(`/orders/${table.order.id}/release-table`, csrfToken, {
+        method: 'POST',
+        body: JSON.stringify({ version: table.order.version, dining_table_id: table.id }),
+      })
+      setSuccess(`${table.display_name} is available again. The check remains on the primary table.`)
+      await Promise.all([loadFloor(), loadOrders(result.data.id)])
+    } catch (caught) {
+      handleFailure(caught)
     } finally {
       setBusy(false)
     }
@@ -1727,7 +1770,7 @@ export default function FoundationApp() {
         </>
       ) : (
         <>
-          <header><div><p className="eyebrow coral">FLOOR & TABLES</p><h1>Good service starts here.</h1><p className="muted">{user.restaurant.name} · Interactive dining room floor plan</p></div><div className="header-actions"><span className="live"><i /> Live Floor</span>{canManageOrders && <button className="secondary compact" disabled={busy} onClick={() => void openTakeawayOrder()}>🛍 + Takeaway / Parcel</button>}{canManageFloor && <><button className="secondary compact" onClick={() => setShowZones(true)}>Manage zones</button><button className="primary compact" onClick={() => setTableDraft({ ...emptyTable, zone_id: String(zones.find((zone) => zone.active)?.id ?? '') })}>＋ Add table</button></>}</div></header>
+          <header><div><p className="eyebrow coral">FLOOR & TABLES</p><h1>Good service starts here.</h1><p className="muted">{user.restaurant.name} · Interactive dining room floor plan</p></div><div className="header-actions"><span className="live"><i /> Live Floor</span>{canManageOrders && <><button className="secondary compact" disabled={busy} onClick={() => setShowTableGroup(true)}>⇄ Merge tables</button><button className="secondary compact" disabled={busy} onClick={() => void openTakeawayOrder()}>🛍 + Takeaway / Parcel</button></>}{canManageFloor && <><button className="secondary compact" onClick={() => setShowZones(true)}>Manage zones</button><button className="primary compact" onClick={() => setTableDraft({ ...emptyTable, zone_id: String(zones.find((zone) => zone.active)?.id ?? '') })}>＋ Add table</button></>}</div></header>
           <section className="summary-grid"><Summary icon="✓" tone="green" value={tables.filter((table) => table.active && table.status === 'AVAILABLE').length} label="Available" /><Summary icon="●" tone="blue" value={tables.filter((table) => table.status === 'OPEN').length} label="Occupied" /><Summary icon="◷" tone="amber" value={tables.filter((table) => table.status === 'BILL_REQUESTED' || table.status === 'PARTIALLY_PAID').length} label="Bill / Payment" /><Summary icon="#" tone="ink" value={tables.length} label="Total tables" /></section>
           {zones.length === 0 ? <EmptyState title="No zones yet" copy="Add Indoor, Outdoor, or another service zone to begin." action={canManageFloor ? () => setShowZones(true) : undefined} /> : <>
             <div className="floor-plan-bar">
@@ -1739,7 +1782,7 @@ export default function FoundationApp() {
                 <span><i className="legend-chair-icon" /> Filled Chair = Seated Guest</span>
               </div>
             </div>
-            {visibleZones.map((zone) => <section className={`zone-section floor-canvas ${zone.active ? '' : 'inactive-zone'}`} key={zone.id}><div className="zone-title"><h2>{zone.name}</h2><span>{zone.active ? `${zone.tables.length} dining tables` : 'Inactive zone'}</span></div>{zone.tables.length === 0 ? <div className="inline-empty">No tables in this zone.</div> : <div className="table-grid floor-plan-grid">{zone.tables.map((table) => <FloorTableCard key={table.id} table={table} zoneId={zone.id} canManageOrders={canManageOrders} canManageFloor={canManageFloor} busy={busy} onOpenOrder={() => void openOrFocusTableOrder(table.id, Math.min(4, table.capacity))} onEdit={() => setTableDraft({ id: table.id, zone_id: String(zone.id), code: table.code, display_name: table.display_name, capacity: table.capacity })} onToggleActive={() => void setActivation('tables', table.id, !table.active)} onAdjustChairs={(delta) => void quickAdjustTableChairs(table, zone.id, delta)} />)}</div>}</section>)}
+            {visibleZones.map((zone) => <section className={`zone-section floor-canvas ${zone.active ? '' : 'inactive-zone'}`} key={zone.id}><div className="zone-title"><h2>{zone.name}</h2><span>{zone.active ? `${zone.tables.length} dining tables` : 'Inactive zone'}</span></div>{zone.tables.length === 0 ? <div className="inline-empty">No tables in this zone.</div> : <div className="table-grid floor-plan-grid">{zone.tables.map((table) => <FloorTableCard key={table.id} table={table} zoneId={zone.id} canManageOrders={canManageOrders} canManageFloor={canManageFloor} busy={busy} onOpenOrder={() => void openOrFocusTableOrder(table.id, Math.min(4, table.capacity))} onEdit={() => setTableDraft({ id: table.id, zone_id: String(zone.id), code: table.code, display_name: table.display_name, capacity: table.capacity })} onToggleActive={() => void setActivation('tables', table.id, !table.active)} onAdjustChairs={(delta) => void quickAdjustTableChairs(table, zone.id, delta)} onReleaseFromGroup={() => void releaseTableFromGroup(table)} />)}</div>}</section>)}
           </>}
         </>
       )}
@@ -1751,6 +1794,7 @@ export default function FoundationApp() {
     </main>
     {tableDraft && <TableModal draft={tableDraft} zones={zones.filter((zone) => zone.active)} errors={fieldErrors} busy={busy} onChange={setTableDraft} onClose={() => { setTableDraft(null); setFieldErrors({}) }} onSubmit={saveTable} />}
     {showZones && <ZoneManager zones={zones} draft={zoneDraft} errors={fieldErrors} busy={busy} onDraft={setZoneDraft} onClose={() => { setShowZones(false); setZoneDraft(null); setFieldErrors({}) }} onSubmit={saveZone} onActivation={(zone, active) => setActivation('zones', zone.id, active)} />}
+    {showTableGroup && <TableGroupModal tables={tables} busy={busy} onClose={() => setShowTableGroup(false)} onSave={saveTableGroup} />}
     {printKots.length > 0 && <KotPrintModal kots={printKots} busy={busy} onClose={() => setPrintKots([])} onReprint={reprintKot} />}
     {printInvoice && <InvoicePrintModal restaurantName={user.restaurant.name} invoice={printInvoice} busy={busy} onClose={() => setPrintInvoice(null)} onReprint={reprintInvoice} />}
   </div>
@@ -1758,6 +1802,26 @@ export default function FoundationApp() {
 
 function Summary({ icon, tone, value, label }: { icon: string; tone: string; value: number; label: string }) {
   return <article><span className={`summary-icon ${tone}`}>{icon}</span><div><strong>{value}</strong><p>{label}</p></div></article>
+}
+
+function TableGroupModal({ tables, busy, onClose, onSave }: { tables: DiningTable[]; busy: boolean; onClose: () => void; onSave: (order: NonNullable<DiningTable['order']>, tableIds: number[]) => void }) {
+  const primaryOrders = tables.flatMap((table) => table.order?.status === 'OPEN' && table.order.group_primary_table_id === table.id ? [{ table, order: table.order }] : [])
+  const [primaryOrderId, setPrimaryOrderId] = useState<number | null>(primaryOrders[0]?.order.id ?? null)
+  const selectedPrimary = primaryOrders.find(({ order }) => order.id === primaryOrderId)
+  const order = selectedPrimary?.order
+  const primaryTableId = selectedPrimary?.table.id ?? 0
+  const [selectedTableIds, setSelectedTableIds] = useState<number[]>(order?.group_table_ids ?? [])
+  const availableTables = tables.filter((table) => table.active && (table.status === 'AVAILABLE' || table.order?.id === order?.id))
+
+  const toggleTable = (tableId: number) => {
+    if (tableId === primaryTableId) {
+      return
+    }
+
+    setSelectedTableIds((current) => current.includes(tableId) ? current.filter((id) => id !== tableId) : [...current, tableId])
+  }
+
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="modal table-group-modal" onMouseDown={(event) => event.stopPropagation()}><div className="modal-head"><div><p className="eyebrow coral">LARGE PARTY</p><h2>Merge dining tables</h2></div><button type="button" className="icon-button" onClick={onClose}>×</button></div>{primaryOrders.length === 0 ? <div className="inline-empty">Start an order on the main table first, then return here to add the extra tables for the party.</div> : <><label>Primary table<select value={primaryOrderId ?? ''} onChange={(event) => { const nextOrder = primaryOrders.find(({ order: candidate }) => candidate.id === Number(event.target.value))?.order; setPrimaryOrderId(nextOrder?.id ?? null); setSelectedTableIds(nextOrder?.group_table_ids ?? []) }}><option value="">Choose the main check</option>{primaryOrders.map(({ table, order: candidate }) => <option key={candidate.id} value={candidate.id}>{table.display_name} · {candidate.order_number}</option>)}</select></label><p className="muted">All selected tables share one check: <strong>{order?.order_number}</strong>. Select at least two tables.</p><div className="table-group-options">{availableTables.map((table) => { const isPrimary = table.id === primaryTableId; const isSelected = selectedTableIds.includes(table.id); return <label className={`table-group-option ${isSelected ? 'selected' : ''}`} key={table.id}><input type="checkbox" checked={isSelected} disabled={isPrimary || busy} onChange={() => toggleTable(table.id)} /><span><strong>{table.display_name}</strong><small>{isPrimary ? 'Primary check' : table.order ? 'Already joined' : `${table.capacity} seats · Available`}</small></span></label> })}</div><p className="table-group-help">To release a secondary table later, use its <strong>Release this table</strong> button on the floor.</p></>}<div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button>{order && <button className="primary" disabled={busy || selectedTableIds.length < 2} onClick={() => onSave(order, selectedTableIds)}>{busy ? 'Saving…' : `Combine ${selectedTableIds.length} tables`}</button>}</div></section></div>
 }
 
 function FloorTableCard({
@@ -1769,6 +1833,7 @@ function FloorTableCard({
   onEdit,
   onToggleActive,
   onAdjustChairs,
+  onReleaseFromGroup,
 }: {
   table: DiningTable
   zoneId: number
@@ -1779,9 +1844,10 @@ function FloorTableCard({
   onEdit: () => void
   onToggleActive: () => void
   onAdjustChairs: (delta: number) => void
+  onReleaseFromGroup: () => void
 }) {
   const visualSeats = Math.max(2, Math.min(8, table.capacity))
-  const occupiedGuests = table.order ? Math.min(visualSeats, table.order.guest_count) : 0
+  const occupiedGuests = table.order && table.order.group_primary_table_id === table.id ? Math.min(visualSeats, table.order.guest_count) : 0
 
   const hasSideChairs = visualSeats >= 6
   const sideCount = hasSideChairs ? 2 : 0
@@ -1849,7 +1915,8 @@ function FloorTableCard({
               <strong>{table.status.replace('_', ' ')}</strong>
               {table.order ? (
                 <span>
-                  {table.order.guest_count} guests · {table.order.order_number}
+                  {table.order.group_primary_table_id === table.id ? `${table.order.guest_count} guests · ${table.order.order_number}` : `Joined check · ${table.order.order_number}`}
+                  {table.order.group_table_ids.length > 1 ? ` · ${table.order.group_table_ids.length} tables` : ''}
                   {table.order.total ? ` · ৳${Number(table.order.total).toFixed(0)}` : ''}
                 </span>
               ) : (
@@ -1875,9 +1942,12 @@ function FloorTableCard({
 
       <div className="floor-table-footer">
         {canManageOrders && table.active && (
-          <button className="table-order-cta" disabled={busy} onClick={onOpenOrder}>
-            {table.order ? `Open check · ${table.order.order_number}` : '＋ Start order'}
-          </button>
+          <>
+            <button className="table-order-cta" disabled={busy} onClick={onOpenOrder}>
+              {table.order ? `Open check · ${table.order.order_number}` : '＋ Start order'}
+            </button>
+            {table.order && table.order.group_primary_table_id !== table.id && <button className="release-table-btn" disabled={busy} onClick={onReleaseFromGroup}>Release this table</button>}
+          </>
         )}
         {canManageFloor && (
           <div className="card-actions">
@@ -1925,7 +1995,7 @@ function FieldError({ errors }: { errors?: string[] }) {
 }
 
 function EmptyState({ title, copy, action }: { title: string; copy: string; action?: () => void }) {
-  return <section className="empty-state"><div>□</div><h2>{title}</h2><p>{copy}</p>{action && <button className="primary compact" onClick={action}>Manage zones</button>}</section>
+  return <section className="empty-state"><div className="empty-state-icon">□</div><h2>{title}</h2><p>{copy}</p>{action && <button className="primary compact" onClick={action}>Manage zones</button>}</section>
 }
 
 function TableModal({ draft, zones, errors, busy, onChange, onClose, onSubmit }: { draft: TableDraft; zones: Zone[]; errors: Record<string, string[]>; busy: boolean; onChange: (draft: TableDraft) => void; onClose: () => void; onSubmit: (event: FormEvent) => void }) {

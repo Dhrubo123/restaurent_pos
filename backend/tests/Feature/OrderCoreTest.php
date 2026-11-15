@@ -176,6 +176,69 @@ class OrderCoreTest extends TestCase
         $this->assertNull($t2->fresh()->openOrder());
     }
 
+    public function test_open_order_can_reserve_and_release_multiple_dining_tables_for_one_party(): void
+    {
+        [$waiter, , , [$t1, $t2, $t3]] = $this->orderSetup();
+
+        $order = $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$t1->id}/orders", ['guest_count' => 8])
+            ->assertCreated()
+            ->json('data');
+
+        $combined = $this->actingAs($waiter)
+            ->postJson("/api/v1/orders/{$order['id']}/merge-tables", [
+                'version' => $order['version'],
+                'table_ids' => [$t1->id, $t2->id, $t3->id],
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame([$t1->id, $t2->id, $t3->id], $combined['merged_dining_table_ids']);
+        $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$t2->id}/orders", ['guest_count' => 2])
+            ->assertOk()
+            ->assertJsonPath('data.id', $order['id']);
+
+        $floorTables = collect($this->actingAs($waiter)->getJson('/api/v1/floor')->assertOk()->json('data'))
+            ->flatMap(fn (array $zone) => $zone['tables'])
+            ->keyBy('id');
+        $this->assertSame('OPEN', $floorTables[$t1->id]['status']);
+        $this->assertSame('OPEN', $floorTables[$t2->id]['status']);
+        $this->assertSame('OPEN', $floorTables[$t3->id]['status']);
+        $this->assertSame($order['id'], $floorTables[$t3->id]['order']['id']);
+
+        $released = $this->actingAs($waiter)
+            ->postJson("/api/v1/orders/{$order['id']}/release-table", [
+                'version' => $combined['version'],
+                'dining_table_id' => $t3->id,
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame([$t1->id, $t2->id], $released['merged_dining_table_ids']);
+        $floorTables = collect($this->actingAs($waiter)->getJson('/api/v1/floor')->assertOk()->json('data'))
+            ->flatMap(fn (array $zone) => $zone['tables'])
+            ->keyBy('id');
+        $this->assertSame('AVAILABLE', $floorTables[$t3->id]['status']);
+    }
+
+    public function test_open_order_can_be_cancelled_without_a_reason(): void
+    {
+        [$waiter, , , [$table]] = $this->orderSetup();
+
+        $order = $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 2])
+            ->assertCreated()
+            ->json('data');
+
+        $this->actingAs($waiter)
+            ->postJson("/api/v1/orders/{$order['id']}/cancel", ['version' => $order['version']])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'CANCELLED');
+
+        $this->assertSame('CANCELLED', Order::query()->findOrFail($order['id'])->status);
+    }
+
     private function orderSetup(): array
     {
         $restaurant = Restaurant::query()->create([

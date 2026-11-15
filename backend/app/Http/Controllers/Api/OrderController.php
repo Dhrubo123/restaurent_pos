@@ -65,16 +65,19 @@ class OrderController extends Controller
 
                 abort_if(! $lockedTable->active, 409, 'Cannot open an order on an inactive table.');
 
+                $user = $request->user();
+
                 $existing = $lockedTable->orders()
                     ->whereIn('status', Order::OPEN_STATUSES)
                     ->latest('opened_at')
                     ->first();
 
+                $existing ??= $this->findOpenOrderUsingTable($user->restaurant_id, $lockedTable->id, true);
+
                 if ($existing) {
                     return response()->json(['data' => $this->loadOrderDetails($existing)], 200);
                 }
 
-                $user = $request->user();
                 $nextNumber = Order::query()->where('restaurant_id', $user->restaurant_id)->count() + 1;
                 $orderNumber = sprintf('ORD-%04d', $nextNumber);
 
@@ -86,6 +89,7 @@ class OrderController extends Controller
                 $order = Order::query()->create([
                     'restaurant_id' => $user->restaurant_id,
                     'dining_table_id' => $lockedTable->id,
+                    'merged_dining_table_ids' => [$lockedTable->id],
                     'order_number' => $orderNumber,
                     'status' => 'OPEN',
                     'waiter_id' => $user->id,
@@ -280,10 +284,12 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'version' => ['required', 'integer', 'min:1'],
-            'reason' => ['required', 'string', 'min:3', 'max:500'],
+            'reason' => ['nullable', 'string', 'min:3', 'max:500'],
         ]);
 
-        return DB::transaction(function () use ($request, $order, $validated) {
+        $cancellationReason = trim((string) ($validated['reason'] ?? '')) ?: 'Cancelled from POS.';
+
+        return DB::transaction(function () use ($request, $order, $validated, $cancellationReason) {
             /** @var Order $locked */
             $locked = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
             $this->assertOpen($locked);
@@ -303,7 +309,7 @@ class OrderController extends Controller
             $before = ['status' => $locked->status, 'version' => $locked->version];
             $locked->items()->where('status', '!=', 'CANCELLED')->update([
                 'status' => 'CANCELLED',
-                'cancel_reason' => $validated['reason'],
+                'cancel_reason' => $cancellationReason,
             ]);
 
             $locked->update([
@@ -318,7 +324,7 @@ class OrderController extends Controller
                 $locked,
                 $before,
                 ['status' => 'CANCELLED', 'version' => $locked->version],
-                $validated['reason'],
+                $cancellationReason,
             );
 
             return response()->json(['data' => $this->loadOrderDetails($locked->fresh())]);
@@ -352,9 +358,17 @@ class OrderController extends Controller
             abort_if($targetTable->id === $lockedOrder->dining_table_id, 409, 'Order is already assigned to this table.');
             abort_if(! $targetTable->active, 409, 'Cannot transfer an order to an inactive table.');
 
-            $targetHasOpenOrder = $targetTable->orders()
-                ->whereIn('status', Order::OPEN_STATUSES)
-                ->exists();
+            abort_if(
+                count($this->tableIdsForOrder($lockedOrder)) > 1,
+                409,
+                'Release the additional tables before transferring this combined party.',
+            );
+
+            $targetHasOpenOrder = $this->findOpenOrderUsingTable(
+                $request->user()->restaurant_id,
+                $targetTable->id,
+                true,
+            ) !== null;
 
             abort_if(
                 $targetHasOpenOrder,
@@ -376,6 +390,7 @@ class OrderController extends Controller
 
             $lockedOrder->update([
                 'dining_table_id' => $targetTable->id,
+                'merged_dining_table_ids' => [$targetTable->id],
                 'version' => $lockedOrder->version + 1,
             ]);
 
@@ -479,6 +494,119 @@ class OrderController extends Controller
         });
     }
 
+    public function mergeTables(Request $request, Order $order): JsonResponse
+    {
+        Gate::authorize('manage-orders');
+        $this->assertRestaurant($request, $order);
+
+        $validated = $request->validate([
+            'version' => ['required', 'integer', 'min:1'],
+            'table_ids' => ['required', 'array', 'min:2', 'max:12'],
+            'table_ids.*' => ['required', 'integer', 'distinct'],
+        ]);
+
+        return DB::transaction(function () use ($request, $order, $validated) {
+            /** @var Order $lockedOrder */
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $this->assertOpen($lockedOrder);
+            $this->assertVersion($lockedOrder, (int) $validated['version']);
+            abort_if($lockedOrder->status !== 'OPEN' || (float) $lockedOrder->paid_amount > 0, 409, 'Only unpaid open checks can be combined.');
+
+            $requestedTableIds = array_map('intval', $validated['table_ids']);
+            abort_unless(in_array($lockedOrder->dining_table_id, $requestedTableIds, true), 422, 'The primary table must remain in the combined party.');
+
+            $tables = DiningTable::query()
+                ->where('restaurant_id', $request->user()->restaurant_id)
+                ->whereIn('id', $requestedTableIds)
+                ->lockForUpdate()
+                ->get();
+
+            abort_unless($tables->count() === count($requestedTableIds), 422, 'One or more selected tables are not available in this restaurant.');
+            abort_if($tables->contains(fn (DiningTable $table) => ! $table->active), 409, 'Inactive tables cannot be combined.');
+
+            $openOrders = Order::query()
+                ->where('restaurant_id', $request->user()->restaurant_id)
+                ->whereIn('status', Order::OPEN_STATUSES)
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($openOrders as $openOrder) {
+                if ($openOrder->id === $lockedOrder->id) {
+                    continue;
+                }
+
+                abort_if(
+                    count(array_intersect($requestedTableIds, $this->tableIdsForOrder($openOrder))) > 0,
+                    409,
+                    'One or more selected tables already has an open check. Merge that check first or choose an available table.',
+                );
+            }
+
+            $previousTableIds = $this->tableIdsForOrder($lockedOrder);
+            $combinedTableIds = array_values(array_unique([...$previousTableIds, ...$requestedTableIds]));
+
+            $lockedOrder->update([
+                'merged_dining_table_ids' => $combinedTableIds,
+                'version' => $lockedOrder->version + 1,
+            ]);
+
+            Audit::record(
+                $request,
+                'order.tables_merged',
+                $lockedOrder,
+                ['dining_table_ids' => $previousTableIds],
+                ['dining_table_ids' => $combinedTableIds, 'version' => $lockedOrder->version],
+                'Combined dining tables for one party.',
+            );
+
+            return response()->json(['data' => $this->loadOrderDetails($lockedOrder->fresh())]);
+        });
+    }
+
+    public function releaseTable(Request $request, Order $order): JsonResponse
+    {
+        Gate::authorize('manage-orders');
+        $this->assertRestaurant($request, $order);
+
+        $validated = $request->validate([
+            'version' => ['required', 'integer', 'min:1'],
+            'dining_table_id' => ['required', 'integer'],
+        ]);
+
+        return DB::transaction(function () use ($request, $order, $validated) {
+            /** @var Order $lockedOrder */
+            $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $this->assertOpen($lockedOrder);
+            $this->assertVersion($lockedOrder, (int) $validated['version']);
+
+            $currentTableIds = $this->tableIdsForOrder($lockedOrder);
+            $tableIdToRelease = (int) $validated['dining_table_id'];
+            abort_if($tableIdToRelease === $lockedOrder->dining_table_id, 422, 'The primary table cannot be released from its own check.');
+            abort_unless(in_array($tableIdToRelease, $currentTableIds, true), 422, 'This table is not part of the combined party.');
+
+            $remainingTableIds = array_values(array_filter(
+                $currentTableIds,
+                fn (int $tableId) => $tableId !== $tableIdToRelease,
+            ));
+
+            $lockedOrder->update([
+                'merged_dining_table_ids' => $remainingTableIds,
+                'version' => $lockedOrder->version + 1,
+            ]);
+
+            Audit::record(
+                $request,
+                'order.table_released',
+                $lockedOrder,
+                ['dining_table_ids' => $currentTableIds],
+                ['dining_table_ids' => $remainingTableIds, 'version' => $lockedOrder->version],
+                'Released a table from a combined party.',
+            );
+
+            return response()->json(['data' => $this->loadOrderDetails($lockedOrder->fresh())]);
+        });
+    }
+
     private function loadOrderDetails(Order $order): Order
     {
         return $order->load([
@@ -490,6 +618,36 @@ class OrderController extends Controller
             'payments' => fn ($q) => $q->with('receiver:id,name')->orderBy('id'),
             'transfers' => fn ($q) => $q->with(['fromTable:id,code,display_name', 'toTable:id,code,display_name', 'actor:id,name'])->latest('transferred_at'),
         ]);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function tableIdsForOrder(Order $order): array
+    {
+        $tableIds = $order->merged_dining_table_ids;
+
+        if (! is_array($tableIds) || $tableIds === []) {
+            return [$order->dining_table_id];
+        }
+
+        return array_values(array_unique(array_map('intval', $tableIds)));
+    }
+
+    private function findOpenOrderUsingTable(int $restaurantId, int $diningTableId, bool $forUpdate = false): ?Order
+    {
+        $query = Order::query()
+            ->where('restaurant_id', $restaurantId)
+            ->whereIn('status', Order::OPEN_STATUSES)
+            ->latest('opened_at');
+
+        if ($forUpdate) {
+            $query->lockForUpdate();
+        }
+
+        return $query->get()->first(
+            fn (Order $openOrder) => in_array($diningTableId, $this->tableIdsForOrder($openOrder), true),
+        );
     }
 
     private function assertRestaurant(Request $request, Order $order): void

@@ -65,6 +65,7 @@ export type OrderRecord = {
   paid_amount: string
   balance_due: string
   opened_at: string
+  merged_dining_table_ids?: number[]
   table?: {
     id: number
     code: string
@@ -371,10 +372,10 @@ export default function OrderWorkspace({
 
       {!selectedOrder ? (
         <section className="empty-state">
-          <div>▤</div>
+          <div className="empty-state-icon">▤</div>
           <h2>No active check selected</h2>
           <p>Tap an open table on the Floor, start a Takeaway / Parcel order, or open a dining table.</p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+          <div className="empty-state-actions">
             {onOpenTakeaway && (
               <button
                 type="button"
@@ -978,11 +979,10 @@ export default function OrderWorkspace({
               </button>
             </div>
             <label>
-              Cancellation reason (mandatory for audit log)
+              Cancellation reason (optional)
               <input
-                required
                 minLength={3}
-                placeholder="e.g. Guests walked out before ordering"
+                placeholder="e.g. Guests walked out before ordering (optional)"
                 value={cancelModal.reason}
                 onChange={(e) => setCancelModal({ reason: e.target.value })}
               />

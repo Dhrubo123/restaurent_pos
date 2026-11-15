@@ -89,6 +89,8 @@ Route::prefix('v1')->middleware('web')->group(function () {
             Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel']);
             Route::post('/orders/{order}/transfer', [OrderController::class, 'transfer']);
             Route::post('/orders/{order}/merge', [OrderController::class, 'merge']);
+            Route::post('/orders/{order}/merge-tables', [OrderController::class, 'mergeTables']);
+            Route::post('/orders/{order}/release-table', [OrderController::class, 'releaseTable']);
 
             Route::post('/orders/{order}/items', [OrderItemController::class, 'store']);
             Route::patch('/orders/{order}/items/{orderItem}', [OrderItemController::class, 'update']);
