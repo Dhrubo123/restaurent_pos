@@ -1101,14 +1101,37 @@ function CustomizeModal({
         <div className="field-row">
           <label>
             Quantity
-            <input
-              type="number"
-              min="1"
-              max="100"
-              required
-              value={draft.quantity}
-              onChange={(e) => onChange({ ...draft, quantity: Math.max(1, Number(e.target.value)) })}
-            />
+            <div className="quantity-stepper">
+              <button
+                type="button"
+                aria-label="Decrease quantity"
+                disabled={draft.quantity <= 1}
+                onClick={() => onChange({ ...draft, quantity: draft.quantity - 1 })}
+              >
+                −
+              </button>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max="100"
+                step="1"
+                required
+                value={draft.quantity}
+                onChange={(e) => onChange({
+                  ...draft,
+                  quantity: Math.max(1, Math.min(100, Math.floor(Number(e.target.value) || 1))),
+                })}
+              />
+              <button
+                type="button"
+                aria-label="Increase quantity"
+                disabled={draft.quantity >= 100}
+                onClick={() => onChange({ ...draft, quantity: draft.quantity + 1 })}
+              >
+                +
+              </button>
+            </div>
           </label>
           <label>
             Special instruction / note

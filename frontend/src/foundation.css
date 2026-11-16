@@ -38,6 +38,30 @@
 .modifier-picker{margin:16px 0}
 .picker-label{display:block;margin-bottom:8px;color:#465552;font-weight:700;font-size:.9rem}
 .modifier-checkboxes{display:flex;flex-wrap:wrap;gap:8px}
+.quantity-stepper{
+  display:flex;
+  align-items:stretch;
+  gap:8px;
+  width:100%;
+}
+.quantity-stepper input{
+  flex:1;
+  min-width:0;
+  text-align:center;
+}
+.quantity-stepper button{
+  flex:0 0 48px;
+  min-height:48px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#fff;
+  color:var(--ink);
+  font-size:1.5rem;
+  font-weight:700;
+}
+.quantity-stepper button:disabled{
+  opacity:.4;
+}
 .variant-editor-list{display:grid;gap:9px;margin:12px 0}
 .variant-editor-row{display:grid;grid-template-columns:1.1fr .9fr .75fr auto auto;gap:8px;align-items:center;padding:9px;border:1px solid var(--line);border-radius:10px;background:#fff}
 .variant-editor-row input{width:100%;min-width:0;height:40px;padding:0 9px;border:1px solid #dce4df;border-radius:8px;background:#fff;color:var(--ink)}
