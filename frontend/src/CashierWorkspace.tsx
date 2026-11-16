@@ -33,6 +33,8 @@ type Props = {
   currentShift: CashierShiftRecord | null
   recentShifts: CashierShiftRecord[]
   recentInvoices: InvoiceRecord[]
+  ownerInvoices: InvoiceRecord[]
+  canChargeOwner: boolean
   canApproveShift: boolean
   busy: boolean
   onSelectOrder: (orderId: number) => Promise<void>
@@ -64,6 +66,11 @@ type Props = {
       provider_reference?: string
     },
   ) => Promise<boolean>
+  onChargeOwner: (order: OrderRecord) => Promise<boolean>
+  onPayOwnerInvoice: (
+    invoice: InvoiceRecord,
+    payload: { method: 'CASH' | 'CARD' | 'BKASH' | 'NAGAD'; amount: number; tendered_amount?: number; provider_reference?: string },
+  ) => Promise<boolean>
   onViewInvoice: (invoice: InvoiceRecord) => void
   onPrintGuestBill?: (order: OrderRecord) => void
 }
@@ -75,6 +82,8 @@ export default function CashierWorkspace({
   currentShift,
   recentShifts,
   recentInvoices,
+  ownerInvoices,
+  canChargeOwner,
   canApproveShift,
   busy,
   onSelectOrder,
@@ -85,6 +94,8 @@ export default function CashierWorkspace({
   onRemoveDiscount,
   onRecordPayment,
   onCheckoutOrder,
+  onChargeOwner,
+  onPayOwnerInvoice,
   onViewInvoice,
   onPrintGuestBill,
 }: Props) {
@@ -92,6 +103,20 @@ export default function CashierWorkspace({
   const [amount, setAmount] = useState('')
   const [tendered, setTendered] = useState('')
   const [providerRef, setProviderRef] = useState('')
+  const [ownerPaymentInvoice, setOwnerPaymentInvoice] = useState<InvoiceRecord | null>(null)
+  const [ownerPaymentAmount, setOwnerPaymentAmount] = useState('')
+  const [ownerPaymentMethod, setOwnerPaymentMethod] = useState<'CASH' | 'CARD' | 'BKASH' | 'NAGAD'>('CASH')
+  const [ownerPaymentReference, setOwnerPaymentReference] = useState('')
+  const [ownerStatementMonth, setOwnerStatementMonth] = useState(() => {
+    const today = new Date()
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [splitGuestInput, setSplitGuestInput] = useState<string | null>(null)
+  const [equalSplit, setEqualSplit] = useState<{
+    orderId: number
+    balanceInPaisa: number
+    guestsRemaining: number
+  } | null>(null)
 
   const [showOpenShiftModal, setShowOpenShiftModal] = useState(false)
   const [openingFloatInput, setOpeningFloatInput] = useState('1000')
@@ -111,15 +136,39 @@ export default function CashierWorkspace({
   const activeOrLatestShift = currentShift ?? recentShifts[0] ?? null
 
   const balanceDue = Number(selectedOrder?.balance_due ?? 0)
+  const monthlyOwnerInvoices = ownerInvoices.filter((invoice) => {
+    const issuedAt = new Date(invoice.issued_at)
+    return `${issuedAt.getFullYear()}-${String(issuedAt.getMonth() + 1).padStart(2, '0')}` === ownerStatementMonth
+  })
+  const ownerOutstanding = ownerInvoices.reduce(
+    (sum, invoice) => sum + Math.max(0, Number(invoice.total) - Number(invoice.paid_amount)),
+    0,
+  )
+  const balanceInPaisa = Math.round(balanceDue * 100)
+  const guestsRemaining =
+    equalSplit && equalSplit.orderId === selectedOrder?.id && equalSplit.balanceInPaisa === balanceInPaisa
+      ? equalSplit.guestsRemaining
+      : 0
+  const suggestedAmount = (Math.ceil(balanceInPaisa / (guestsRemaining || 1)) / 100).toFixed(2)
+  const splitGuestCount = Number(splitGuestInput)
+  const canApplyEqualSplit =
+    Number.isInteger(splitGuestCount) && splitGuestCount >= 2 && splitGuestCount <= Math.min(100, balanceInPaisa)
 
   useEffect(() => {
-    if (selectedOrder) {
-      const bal = Number(selectedOrder.balance_due).toFixed(2)
-      setAmount(bal)
-      setTendered(bal)
-      setProviderRef('')
-    }
-  }, [selectedOrder?.id, selectedOrder?.balance_due])
+    setAmount(suggestedAmount)
+    setTendered(suggestedAmount)
+    setProviderRef('')
+    setSplitGuestInput(null)
+  }, [selectedOrder?.id, balanceInPaisa, guestsRemaining, suggestedAmount])
+
+  const applyEqualSplit = () => {
+    if (!selectedOrder || busy || !canApplyEqualSplit) return
+    const share = (Math.ceil(balanceInPaisa / splitGuestCount) / 100).toFixed(2)
+    setEqualSplit({ orderId: selectedOrder.id, balanceInPaisa, guestsRemaining: splitGuestCount })
+    setAmount(share)
+    setTendered(share)
+    setSplitGuestInput(null)
+  }
 
   const activeItems = useMemo(
     () => (selectedOrder?.items ?? []).filter((i) => i.status !== 'CANCELLED'),
@@ -127,13 +176,18 @@ export default function CashierWorkspace({
   )
 
   const numAmount = Number(amount || 0)
-  const numTendered = method === 'CASH' ? Number(tendered || amount || 0) : numAmount
+  const numTendered = method === 'CASH' ? Number(tendered) : numAmount
+  const isPartialPayment = numAmount > 0 && numAmount < balanceDue
+  const isValidPayment =
+    numAmount > 0 &&
+    numAmount <= balanceDue &&
+    (method === 'CASH' ? numTendered >= numAmount : providerRef.trim().length >= 3)
   const changePreview =
     method === 'CASH' ? Math.max(0, numTendered - Math.min(numAmount, balanceDue)) : 0
 
   const handleSplitPayment = async (event: FormEvent) => {
     event.preventDefault()
-    if (!selectedOrder || numAmount <= 0) return
+    if (!selectedOrder || busy || !isPartialPayment || !isValidPayment) return
     const ok = await onRecordPayment(selectedOrder, {
       method,
       amount: numAmount,
@@ -141,22 +195,44 @@ export default function CashierWorkspace({
       provider_reference: method !== 'CASH' ? providerRef.trim() : undefined,
     })
     if (ok) {
+      setEqualSplit(
+        guestsRemaining > 1 && numAmount === Number(suggestedAmount)
+          ? {
+              orderId: selectedOrder.id,
+              balanceInPaisa: balanceInPaisa - Math.round(numAmount * 100),
+              guestsRemaining: guestsRemaining - 1,
+            }
+          : null,
+      )
       setProviderRef('')
     }
   }
 
   const handlePayAndFinalize = async () => {
-    if (!selectedOrder) return
+    if (!selectedOrder || busy || activeItems.length === 0) return
     if (balanceDue <= 0.001) {
       await onCheckoutOrder(selectedOrder)
       return
     }
+    if (!isValidPayment || isPartialPayment) return
     await onCheckoutOrder(selectedOrder, {
       method,
-      amount: Math.min(numAmount || balanceDue, balanceDue),
-      tendered_amount: method === 'CASH' ? Math.max(numTendered, balanceDue) : undefined,
+      amount: numAmount,
+      tendered_amount: method === 'CASH' ? numTendered : undefined,
       provider_reference: method !== 'CASH' ? providerRef.trim() : undefined,
     })
+  }
+
+  const submitOwnerPayment = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!ownerPaymentInvoice) return
+    const ok = await onPayOwnerInvoice(ownerPaymentInvoice, {
+      method: ownerPaymentMethod,
+      amount: Number(ownerPaymentAmount),
+      tendered_amount: ownerPaymentMethod === 'CASH' ? Number(ownerPaymentAmount) : undefined,
+      provider_reference: ownerPaymentMethod !== 'CASH' ? ownerPaymentReference.trim() : undefined,
+    })
+    if (ok) setOwnerPaymentInvoice(null)
   }
 
   const submitOpenShift = async (event: FormEvent) => {
@@ -344,6 +420,54 @@ export default function CashierWorkspace({
             </div>
           )}
 
+          <div className={`owner-account-summary ${ownerOutstanding > 0 ? 'has-due' : ''}`}>
+            <div>
+              <h2>Owner account</h2>
+              <span>{ownerOutstanding > 0 ? 'Payment due' : 'All bills settled'}</span>
+            </div>
+            <strong>৳{ownerOutstanding.toFixed(2)}</strong>
+          </div>
+          <label>
+            Statement month
+            <input type="month" value={ownerStatementMonth} onChange={(event) => setOwnerStatementMonth(event.target.value)} />
+          </label>
+          <p className="muted">
+            This month · Billed ৳{monthlyOwnerInvoices.reduce((sum, inv) => sum + Number(inv.total), 0).toFixed(2)}
+            {' '}· Paid ৳{monthlyOwnerInvoices.reduce((sum, inv) => sum + Number(inv.paid_amount), 0).toFixed(2)}
+            {' '}· Due ৳{monthlyOwnerInvoices.reduce((sum, inv) => sum + Math.max(0, Number(inv.total) - Number(inv.paid_amount)), 0).toFixed(2)}
+          </p>
+          {monthlyOwnerInvoices.length === 0 ? (
+            <div className="inline-empty">No owner account charges for this month.</div>
+          ) : (
+            <div className="zone-list">
+              {monthlyOwnerInvoices.map((inv) => {
+                const due = Math.max(0, Number(inv.total) - Number(inv.paid_amount))
+                return (
+                  <div className={`zone-row owner-invoice-row ${due > 0 ? 'has-due' : 'is-settled'}`} key={inv.id}>
+                    <div>
+                      <strong>{inv.invoice_number} · {new Date(inv.issued_at).toLocaleDateString()}</strong>
+                      <span>Bill ৳{Number(inv.total).toFixed(2)} · Paid ৳{Number(inv.paid_amount).toFixed(2)}</span>
+                    </div>
+                    <strong className="owner-invoice-status">
+                      {due > 0 ? `Due ৳${due.toFixed(2)}` : 'Paid in full'}
+                    </strong>
+                    <div>
+                      <button type="button" onClick={() => onViewInvoice(inv)}>View</button>
+                      {due > 0 && currentShift && (
+                        <button type="button" onClick={() => {
+                          setOwnerPaymentInvoice(inv)
+                          setOwnerPaymentAmount(due.toFixed(2))
+                          setOwnerPaymentMethod('CASH')
+                          setOwnerPaymentReference('')
+                        }}>Record payment</button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {recentShifts.length > 0 && (
             <>
               <div className="zone-title" style={{ marginTop: '28px' }}>
@@ -453,17 +577,19 @@ export default function CashierWorkspace({
                   <span>Order Total</span>
                   <strong>৳{Number(selectedOrder.total).toFixed(2)}</strong>
                 </div>
-                {Number(selectedOrder.paid_amount) > 0 && (
-                  <div className="summary-row" style={{ color: '#21745d', fontWeight: 700 }}>
-                    <span>Captured Payments</span>
-                    <strong>−৳{Number(selectedOrder.paid_amount).toFixed(2)}</strong>
-                  </div>
-                )}
+                <div className="summary-row">
+                  <span>Amount Paid</span>
+                  <strong>৳{Number(selectedOrder.paid_amount ?? 0).toFixed(2)}</strong>
+                </div>
+                <div className="summary-row">
+                  <span>Remaining Balance</span>
+                  <strong>৳{balanceDue.toFixed(2)}</strong>
+                </div>
               </div>
 
               {selectedOrder.payments && selectedOrder.payments.length > 0 && (
                 <div className="ticket-kots-strip">
-                  <span className="kots-strip-label">Captured Split Payments:</span>
+                  <span className="kots-strip-label">Recorded Payments</span>
                   <div className="kots-strip-pills">
                     {selectedOrder.payments.map((p) => (
                       <span key={p.id} className="kot-mini-pill kot-mini-ready">
@@ -478,7 +604,9 @@ export default function CashierWorkspace({
               {!currentShift ? (
                 <div className="ticket-actions">
                   <div className="alert" style={{ margin: 0 }}>
-                    <span>Open a cashier shift to record payments and issue invoices.</span>
+                    <span>
+                      Open a cashier shift to receive payment. You can charge this bill to the owner account below without opening a shift.
+                    </span>
                   </div>
                   <button
                     type="button"
@@ -505,17 +633,31 @@ export default function CashierWorkspace({
                   </div>
 
                   <div className="quick-cash-pills">
+                    {balanceInPaisa >= 2 && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        aria-expanded={splitGuestInput !== null}
+                        onClick={() => setSplitGuestInput(
+                          splitGuestInput === null ? String(Math.max(2, guestsRemaining || selectedOrder.guest_count)) : null,
+                        )}
+                      >
+                        Equal Split
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
                         const exact = balanceDue.toFixed(2)
+                        setEqualSplit(null)
+                        setSplitGuestInput(null)
                         setAmount(exact)
                         setTendered(exact)
                       }}
                     >
-                      Exact (৳{balanceDue.toFixed(0)})
+                      Full balance (৳{balanceDue.toFixed(2)})
                     </button>
-                    {[500, 1000, 2000].map((preset) => (
+                    {method === 'CASH' && [500, 1000, 2000].map((preset) => (
                       <button
                         key={preset}
                         type="button"
@@ -529,6 +671,39 @@ export default function CashierWorkspace({
                     ))}
                   </div>
 
+                  {splitGuestInput !== null && (
+                    <div className="field-row">
+                      <label>
+                        Guests sharing the remaining balance
+                        <input
+                          inputMode="numeric"
+                          value={splitGuestInput}
+                          onChange={(event) => setSplitGuestInput(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              applyEqualSplit()
+                            }
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary compact"
+                        disabled={busy || !canApplyEqualSplit}
+                        onClick={applyEqualSplit}
+                      >
+                        Divide Balance
+                      </button>
+                    </div>
+                  )}
+                  {guestsRemaining > 0 && (
+                    <span className="muted">
+                      {guestsRemaining} remaining {guestsRemaining === 1 ? 'guest' : 'guests'} ·
+                      Next share ৳{suggestedAmount}. You can edit the payment amount below.
+                    </span>
+                  )}
+
                   <div className="field-row">
                     <label>
                       Payment amount (৳)
@@ -536,11 +711,12 @@ export default function CashierWorkspace({
                         type="number"
                         step="0.01"
                         min="0.01"
+                        max={balanceDue}
                         required
                         value={amount}
                         onChange={(e) => {
                           setAmount(e.target.value)
-                          if (method === 'CASH' && Number(tendered) < Number(e.target.value)) {
+                          if (tendered === amount) {
                             setTendered(e.target.value)
                           }
                         }}
@@ -581,6 +757,19 @@ export default function CashierWorkspace({
                   )}
 
                   <div className="cashier-cta-stack">
+                    {balanceDue > 0 && splitGuestInput === null && (
+                      <span className="muted" id="split-payment-hint">
+                        {numAmount === balanceDue
+                          ? 'Enter a smaller payment amount or choose Equal Split. Use Pay & Finalize Invoice for the full balance.'
+                          : !isPartialPayment
+                            ? 'Enter a payment amount greater than zero and below the remaining balance.'
+                            : !isValidPayment
+                              ? method === 'CASH'
+                                ? 'Cash tendered must cover this payment amount.'
+                                : 'Enter the payment reference to record this split.'
+                              : 'Record this guest’s payment to update the remaining balance.'}
+                      </span>
+                    )}
                     {onPrintGuestBill && activeItems.length > 0 && (
                       <button
                         type="button"
@@ -591,9 +780,14 @@ export default function CashierWorkspace({
                         🖨 Print Guest Bill Copy (Table Check)
                       </button>
                     )}
-                    {numAmount > 0 && numAmount < balanceDue - 0.009 && (
-                      <button type="submit" className="secondary ticket-primary-cta" disabled={busy}>
-                        ＋ Record Partial / Split Payment (৳{numAmount.toFixed(2)})
+                    {balanceDue > 0 && (
+                      <button
+                        type="submit"
+                        className="secondary ticket-primary-cta"
+                        disabled={busy || !isPartialPayment || !isValidPayment}
+                        aria-describedby={splitGuestInput === null ? 'split-payment-hint' : undefined}
+                      >
+                        Record Split Payment
                       </button>
                     )}
                     <button
@@ -602,19 +796,58 @@ export default function CashierWorkspace({
                       disabled={
                         busy ||
                         activeItems.length === 0 ||
-                        (balanceDue > 0.001 && method !== 'CASH' && providerRef.trim().length < 3)
+                        (balanceDue > 0 && (!isValidPayment || isPartialPayment))
                       }
                       onClick={() => void handlePayAndFinalize()}
                     >
-                      ✓ Pay & Finalize Invoice · ৳{balanceDue.toFixed(2)}
+                      {balanceDue > 0
+                        ? `Pay & Finalize Invoice · ৳${balanceDue.toFixed(2)}`
+                        : 'Finalize Invoice'}
                     </button>
                   </div>
                 </form>
+              )}
+              {canChargeOwner && balanceDue > 0 && (
+                <button
+                  type="button"
+                  className="secondary ticket-primary-cta"
+                  disabled={busy || activeItems.length === 0}
+                  onClick={() => void onChargeOwner(selectedOrder)}
+                >
+                  Charge ৳{balanceDue.toFixed(2)} to Owner Account & Release Table
+                </button>
               )}
             </>
           )}
         </aside>
       </div>
+
+      {ownerPaymentInvoice && (
+        <div className="modal-backdrop" onMouseDown={() => setOwnerPaymentInvoice(null)}>
+          <form className="modal" onSubmit={submitOwnerPayment} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h2>Pay owner invoice {ownerPaymentInvoice.invoice_number}</h2>
+              <button type="button" className="icon-button" onClick={() => setOwnerPaymentInvoice(null)}>×</button>
+            </div>
+            <p>Balance due ৳{(Number(ownerPaymentInvoice.total) - Number(ownerPaymentInvoice.paid_amount)).toFixed(2)}</p>
+            <label>Payment method
+              <select value={ownerPaymentMethod} onChange={(event) => setOwnerPaymentMethod(event.target.value as typeof ownerPaymentMethod)}>
+                <option value="CASH">Cash</option><option value="CARD">Card</option><option value="BKASH">bKash</option><option value="NAGAD">Nagad</option>
+              </select>
+            </label>
+            <label>Amount received
+              <input type="number" min="0.01" max={Number(ownerPaymentInvoice.total) - Number(ownerPaymentInvoice.paid_amount)} step="0.01" required value={ownerPaymentAmount} onChange={(event) => setOwnerPaymentAmount(event.target.value)} />
+            </label>
+            {ownerPaymentMethod !== 'CASH' && <label>Transaction reference
+              <input required minLength={3} value={ownerPaymentReference} onChange={(event) => setOwnerPaymentReference(event.target.value)} />
+            </label>}
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={() => setOwnerPaymentInvoice(null)}>Cancel</button>
+              <button className="primary" disabled={busy}>Record payment</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {showOpenShiftModal && (
         <div className="modal-backdrop" onMouseDown={() => setShowOpenShiftModal(false)}>

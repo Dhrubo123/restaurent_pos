@@ -211,6 +211,38 @@
   color:var(--ink);
   font-size:1.35rem;
 }
+.invoice-toolbar-name{
+  display:block;
+  color:var(--ink);
+  font-size:.9rem;
+  font-weight:800;
+}
+.invoice-toolbar-brand{
+  display:flex;
+  align-items:center;
+  gap:9px;
+}
+.invoice-toolbar-brand img{
+  width:30px;
+  height:30px;
+  border-radius:50%;
+  object-fit:cover;
+}
+.receipt-brand{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  margin-bottom:10px;
+}
+.receipt-brand-logo{
+  width:32px;
+  height:32px;
+  object-fit:contain;
+}
+.receipt-brand .kot-paper-station{
+  margin-bottom:0;
+}
 .kot-print-toolbar .icon-button{
   display:grid;
   place-items:center;
@@ -446,12 +478,87 @@
   display:grid;
   gap:8px;
 }
+.owner-account-summary{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:16px;
+  margin-top:28px;
+  padding:18px 20px;
+  border:1px solid #cbded1;
+  border-radius:14px;
+  background:#f1f8f3;
+}
+.owner-account-summary.has-due{
+  border-color:#e9b88d;
+  background:#fff1e5;
+  box-shadow:inset 4px 0 0 #df691c;
+}
+.owner-account-summary h2{
+  margin:0;
+  font-size:1.05rem;
+}
+.owner-account-summary span{
+  display:block;
+  margin-top:4px;
+  color:#66736b;
+  font-size:.78rem;
+}
+.owner-account-summary.has-due span{
+  color:#a34c16;
+  font-weight:700;
+}
+.owner-account-summary>strong{
+  color:#1f7050;
+  font-size:1.45rem;
+  white-space:nowrap;
+}
+.owner-account-summary.has-due>strong{
+  color:#b84b0c;
+}
+.owner-invoice-row.has-due{
+  border-color:#f0c5a2;
+  background:#fffaf5;
+  box-shadow:inset 3px 0 0 #e87523;
+}
+.owner-invoice-row.is-settled{
+  background:#f8faf8;
+}
+.owner-invoice-status{
+  padding:7px 10px;
+  border-radius:8px;
+  background:#e7f4eb;
+  color:#257456;
+  font-size:.78rem;
+  white-space:nowrap;
+}
+.owner-invoice-row.has-due .owner-invoice-status{
+  background:#ffe4cf;
+  color:#a7440b;
+}
+@media(max-width:700px){
+  .owner-invoice-row{
+    flex-wrap:wrap;
+  }
+  .owner-invoice-status{
+    order:1;
+  }
+}
 .receipt-colhead{
   grid-template-columns:32px 1fr 72px;
 }
 .receipt-line-row{
   grid-template-columns:32px 1fr 72px;
   align-items:start;
+}
+.receipt-line-row .kot-paper-item-body,
+.receipt-totals>div>:first-child{
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+.receipt-totals>div>:last-child{
+  flex-shrink:0;
+  text-align:right;
 }
 .receipt-line-price{
   text-align:right;
@@ -800,9 +907,14 @@
   margin-top:4px;
 }
 .floor-table-footer .card-actions{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
   margin-top:10px;
   padding-top:10px;
-  justify-content:center;
+}
+.floor-table-footer .card-actions button{
+  min-width:0;
+  overflow-wrap:anywhere;
 }
 
 .tile-in-check{

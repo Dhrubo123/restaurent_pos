@@ -44,6 +44,7 @@ Route::prefix('v1')->middleware('web')->group(function () {
         Route::delete('/orders/{order}/discount', [BillingController::class, 'removeDiscount']);
 
         Route::get('/invoices', [BillingController::class, 'invoices']);
+        Route::get('/owner-account', [BillingController::class, 'ownerAccount']);
         Route::post('/invoices/{invoice}/void', [BillingController::class, 'voidInvoice']);
         Route::post('/invoices/{invoice}/refunds', [BillingController::class, 'refundInvoice']);
 
@@ -74,6 +75,7 @@ Route::prefix('v1')->middleware('web')->group(function () {
 
             Route::post('/orders/{order}/payments', [BillingController::class, 'recordPayment']);
             Route::post('/orders/{order}/checkout', [BillingController::class, 'checkout']);
+            Route::post('/owner-account/invoices/{invoice}/payments', [BillingController::class, 'payOwnerInvoice']);
 
             Route::post('/invoices/{invoice}/reprint', [BillingController::class, 'reprintInvoice']);
         });

@@ -108,6 +108,7 @@ export default function FoundationApp() {
   const [currentShift, setCurrentShift] = useState<CashierShiftRecord | null>(null)
   const [recentShifts, setRecentShifts] = useState<CashierShiftRecord[]>([])
   const [recentInvoices, setRecentInvoices] = useState<InvoiceRecord[]>([])
+  const [ownerInvoices, setOwnerInvoices] = useState<InvoiceRecord[]>([])
   const [printInvoice, setPrintInvoice] = useState<InvoiceRecord | null>(null)
   const [reportData, setReportData] = useState<ReportSummaryData | null>(null)
   const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([])
@@ -192,13 +193,15 @@ export default function FoundationApp() {
   }
 
   const loadBillingData = async () => {
-    const [shiftRes, invoicesRes] = await Promise.all([
+    const [shiftRes, invoicesRes, ownerRes] = await Promise.all([
       request<{ data: { current_shift: CashierShiftRecord | null; recent_shifts: CashierShiftRecord[] } }>('/shifts/current'),
       request<{ data: InvoiceRecord[] }>('/invoices'),
+      request<{ data: InvoiceRecord[] }>('/owner-account'),
     ])
     setCurrentShift(shiftRes.data.current_shift)
     setRecentShifts(shiftRes.data.recent_shifts)
     setRecentInvoices(invoicesRes.data)
+    setOwnerInvoices(ownerRes.data)
   }
 
   const loadReports = async (from?: string, to?: string) => {
@@ -917,6 +920,19 @@ export default function FoundationApp() {
       await loadBillingData()
       return true
     } catch (caught) {
+      if (caught instanceof ApiFailure && caught.status === 409) {
+        try {
+          const shift = await request<{ data: { current_shift: CashierShiftRecord | null } }>('/shifts/current')
+          if (shift.data.current_shift) {
+            await loadBillingData()
+            setError('')
+            setSuccess('Your cashier shift is already open.')
+            return true
+          }
+        } catch {
+          // Keep the original shift error if refreshed billing data is unavailable.
+        }
+      }
       handleFailure(caught)
       return false
     } finally {
@@ -1056,6 +1072,51 @@ export default function FoundationApp() {
       setPrintInvoice(result.invoice)
       setSuccess(`Checkout complete · ${result.invoice.invoice_number} issued.`)
       await Promise.all([loadFloor(), loadOrders(), loadBillingData()])
+      return true
+    } catch (caught) {
+      handleFailure(caught)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const chargeOrderToOwner = async (order: OrderRecord): Promise<boolean> => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ invoice: InvoiceRecord }>(`/orders/${order.id}/checkout`, csrfToken, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `owner-charge-${order.id}-${Date.now()}` },
+        body: JSON.stringify({ version: order.version, charge_to_owner: true }),
+      })
+      setPrintInvoice(result.invoice)
+      setSuccess(`${result.invoice.invoice_number} charged to the owner account.`)
+      await Promise.all([loadFloor(), loadOrders(), loadBillingData()])
+      return true
+    } catch (caught) {
+      handleFailure(caught)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const payOwnerInvoice = async (
+    invoice: InvoiceRecord,
+    payload: { method: 'CASH' | 'CARD' | 'BKASH' | 'NAGAD'; amount: number; tendered_amount?: number; provider_reference?: string },
+  ): Promise<boolean> => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ data: InvoiceRecord }>(`/owner-account/invoices/${invoice.id}/payments`, csrfToken, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `owner-payment-${invoice.id}-${Date.now()}` },
+        body: JSON.stringify(payload),
+      })
+      setSuccess(`Payment recorded for ${invoice.invoice_number}.`)
+      setPrintInvoice(result.data)
+      await loadBillingData()
       return true
     } catch (caught) {
       handleFailure(caught)
@@ -1677,6 +1738,8 @@ export default function FoundationApp() {
           currentShift={currentShift}
           recentShifts={recentShifts}
           recentInvoices={recentInvoices}
+          ownerInvoices={ownerInvoices}
+          canChargeOwner={canManageFloor}
           canApproveShift={canManageFloor || canManageMenu}
           busy={busy}
           onSelectOrder={selectOrderById}
@@ -1687,6 +1750,8 @@ export default function FoundationApp() {
           onRemoveDiscount={removeOrderDiscount}
           onRecordPayment={recordOrderPayment}
           onCheckoutOrder={checkoutOrder}
+          onChargeOwner={chargeOrderToOwner}
+          onPayOwnerInvoice={payOwnerInvoice}
           onViewInvoice={(inv) => setPrintInvoice(inv)}
           onPrintGuestBill={(ord) => setPrintInvoice(buildGuestBillFromOrder(ord))}
         />

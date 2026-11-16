@@ -122,6 +122,49 @@ class BillingAndShiftsTest extends TestCase
         $this->assertSame(1, Invoice::query()->count());
     }
 
+    public function test_owner_account_charge_releases_table_and_later_cash_payment_clears_due(): void
+    {
+        [$waiter, $cashier, $manager, , $table, $steak] = $this->billingSetup();
+        $order = $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 1])
+            ->assertCreated()->json('data');
+        $order = $this->actingAs($waiter)->postJson("/api/v1/orders/{$order['id']}/items", [
+            'version' => $order['version'],
+            'menu_item_id' => $steak->id,
+            'quantity' => 1,
+        ])->assertCreated()->json('data');
+
+        $this->actingAs($cashier)->postJson("/api/v1/orders/{$order['id']}/checkout", [
+            'version' => $order['version'],
+            'charge_to_owner' => true,
+        ])->assertForbidden();
+
+        $charge = $this->actingAs($manager)->withHeader('Idempotency-Key', 'owner-charge-1')
+            ->postJson("/api/v1/orders/{$order['id']}/checkout", [
+                'version' => $order['version'],
+                'charge_to_owner' => true,
+            ])->assertCreated();
+        $this->assertSame('OWNER_DUE', $charge->json('data.status'));
+        $this->assertSame('1000.00', $charge->json('invoice.total'));
+        $this->assertSame('0.00', $charge->json('invoice.paid_amount'));
+        $this->assertNull($table->fresh()->openOrder());
+
+        $invoiceId = $charge->json('invoice.id');
+        $this->actingAs($cashier)->postJson('/api/v1/shifts/open', ['opening_float' => 500])->assertCreated();
+        $this->actingAs($cashier)->withHeader('Idempotency-Key', 'owner-pay-1')
+            ->postJson("/api/v1/owner-account/invoices/{$invoiceId}/payments", [
+                'method' => 'CASH',
+                'amount' => 400,
+            ])->assertCreated()->assertJsonPath('data.status', 'OWNER_DUE');
+        $this->actingAs($cashier)->withHeader('Idempotency-Key', 'owner-pay-2')
+            ->postJson("/api/v1/owner-account/invoices/{$invoiceId}/payments", [
+                'method' => 'CASH',
+                'amount' => 600,
+            ])->assertCreated()->assertJsonPath('data.status', 'ISSUED');
+        $this->assertSame('1000.00', Invoice::query()->findOrFail($invoiceId)->paid_amount);
+        $this->assertSame('1500.00', $this->actingAs($cashier)->getJson('/api/v1/shifts/current')->json('data.current_shift.expected_cash'));
+    }
+
     public function test_cash_change_calculation_non_cash_overpayment_guard_and_shift_variance_approval(): void
     {
         [, $cashier, $manager, , $table, $steak] = $this->billingSetup();

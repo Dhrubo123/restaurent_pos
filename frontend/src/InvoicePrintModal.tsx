@@ -39,7 +39,7 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>${docTitle}</title>
+  <title></title>
   <style>
     @page { size: 80mm auto; margin: 0; }
     * { box-sizing: border-box; }
@@ -82,6 +82,19 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
       font-weight: 900;
       letter-spacing: 0.06em;
     }
+    .receipt-brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .receipt-brand-logo {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+    }
+    .receipt-brand .kot-paper-station { margin-bottom: 0; }
     .kot-paper-hero {
       display: flex;
       align-items: flex-start;
@@ -122,6 +135,7 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
     .kot-paper-line { display: grid; gap: 2px; }
     .kot-paper-line-row { display: grid; grid-template-columns: 34px 1fr; }
     .receipt-line-row { display: grid; grid-template-columns: 32px 1fr 68px; align-items: start; }
+    .receipt-line-row .kot-paper-item-body { min-width: 0; overflow-wrap: anywhere; }
     .kot-paper-qty { font-size: 13px; }
     .kot-paper-item-body { display: grid; gap: 2px; }
     .kot-paper-item-name { font-size: 13px; line-height: 1.2; }
@@ -132,6 +146,8 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
     .kot-paper-order-note { padding: 6px 0; font-size: 11px; font-weight: 800; }
     .receipt-totals { display: grid; gap: 4px; padding: 6px 0; font-size: 11px; }
     .receipt-totals > div { display: flex; justify-content: space-between; gap: 8px; }
+    .receipt-totals > div > :first-child { min-width: 0; overflow-wrap: anywhere; }
+    .receipt-totals > div > :last-child { flex-shrink: 0; text-align: right; }
     .receipt-grand-total {
       margin-top: 4px;
       padding-top: 5px;
@@ -160,8 +176,17 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
 <body>${paperWrapEl.innerHTML}</body>
 </html>`)
   doc.close()
+  doc.title = docTitle
 
-  setTimeout(() => {
+  const imagesReady = Promise.all(Array.from(doc.images, (img) => {
+    if (img.complete) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      img.addEventListener('load', () => resolve(), { once: true })
+      img.addEventListener('error', () => resolve(), { once: true })
+    })
+  }))
+
+  void Promise.race([imagesReady, new Promise((resolve) => setTimeout(resolve, 1500))]).then(() => {
     try {
       iframe.contentWindow?.focus()
       iframe.contentWindow?.print()
@@ -170,7 +195,7 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe)
       }, 2000)
     }
-  }, 60)
+  })
 }
 
 export type InvoiceItemRecord = {
@@ -214,7 +239,8 @@ export type InvoiceRecord = {
   id: number
   order_id: number
   invoice_number: string
-  status: 'ISSUED' | 'VOIDED' | 'PARTIALLY_REFUNDED' | 'REFUNDED' | 'PROFORMA_BILL'
+  status: 'ISSUED' | 'OWNER_DUE' | 'VOIDED' | 'PARTIALLY_REFUNDED' | 'REFUNDED' | 'PROFORMA_BILL'
+  owner_account?: boolean
   guest_count: number
   table_code: string
   table_name: string
@@ -343,6 +369,10 @@ export default function InvoicePrintModal({
       <div className="kot-print-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="kot-print-toolbar no-print">
           <div>
+            <div className="invoice-toolbar-brand">
+              <img src="/clique-cafe-logo.jpg" alt="" />
+              <strong className="invoice-toolbar-name">{restaurantName}</strong>
+            </div>
             <p className="eyebrow coral">
               {isProformaBill ? '80MM GUEST TABLE BILL (PRE-PAYMENT CHECK)' : '80MM CUSTOMER & COUNTER BILL COPIES'}
             </p>
@@ -401,7 +431,10 @@ export default function InvoicePrintModal({
                 </div>
               )}
 
-              <div className="kot-paper-station">{restaurantName.toUpperCase()}</div>
+              <div className="receipt-brand">
+                <img className="receipt-brand-logo" src={`${window.location.origin}/clique-cafe-logo.jpg`} alt="" />
+                <div className="kot-paper-station">{restaurantName}</div>
+              </div>
               <div style={{ textAlign: 'center', fontSize: '9.5px', fontWeight: 700, marginBottom: '4px' }}>
                 COFFEE • BISTRO • DESSERTS
               </div>
@@ -417,7 +450,9 @@ export default function InvoicePrintModal({
               >
                 {isProformaBill
                   ? '*** GUEST BILL COPY (TABLE CHECK — UNPAID) ***'
-                  : whichCopy === 'CUSTOMER'
+                  : invoice.status === 'OWNER_DUE'
+                    ? '*** OWNER ACCOUNT — BALANCE DUE ***'
+                    : whichCopy === 'CUSTOMER'
                     ? '*** CUSTOMER COPY — OFFICIAL TAX RECEIPT ***'
                     : '*** COUNTER / BILL COPY — OFFICE RECORD ***'}
               </div>
@@ -497,6 +532,12 @@ export default function InvoicePrintModal({
                     <span>-৳{Number(invoice.discount_amount).toFixed(2)}</span>
                   </div>
                 )}
+                {Number(invoice.service_charge) > 0 && (
+                  <div>
+                    <span>Service charge</span>
+                    <span>৳{Number(invoice.service_charge).toFixed(2)}</span>
+                  </div>
+                )}
                 <div>
                   <span>VAT / Tax</span>
                   <span>৳{Number(invoice.tax_amount).toFixed(2)}</span>
@@ -518,9 +559,9 @@ export default function InvoicePrintModal({
                     <span>৳{Number(pay.amount).toFixed(2)}</span>
                   </div>
                 ))}
-                {isProformaBill ? (
+                {isProformaBill || invoice.status === 'OWNER_DUE' ? (
                   <div className="receipt-grand-total">
-                    <strong>AMOUNT DUE TO PAY</strong>
+                    <strong>{invoice.status === 'OWNER_DUE' ? 'OWNER ACCOUNT DUE' : 'AMOUNT DUE TO PAY'}</strong>
                     <strong>৳{balanceDue.toFixed(2)}</strong>
                   </div>
                 ) : (
@@ -565,7 +606,13 @@ export default function InvoicePrintModal({
                       ? 'THANK YOU FOR DINING WITH US!'
                       : 'COUNTER / BILL RECORD COPY'}
                 </span>
-                <span>{isProformaBill ? 'UNPAID' : invoice.status}</span>
+                <span>
+                  {isProformaBill
+                    ? 'UNPAID'
+                    : invoice.status === 'ISSUED' && balanceDue <= 0.001
+                      ? 'PAID'
+                      : invoice.status.replaceAll('_', ' ')}
+                </span>
               </div>
               <div className="receipt-dev-credit">Developed by Tech Base</div>
             </article>

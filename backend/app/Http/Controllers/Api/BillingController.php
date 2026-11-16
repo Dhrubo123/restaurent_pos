@@ -162,6 +162,7 @@ class BillingController extends Controller
 
         $validated = $request->validate([
             'version' => ['required', 'integer', 'min:1'],
+            'charge_to_owner' => ['sometimes', 'boolean'],
             'method' => ['sometimes', 'nullable', Rule::in(Payment::METHODS)],
             'amount' => ['sometimes', 'nullable', 'numeric', 'min:0.01', 'max:9999999.99'],
             'tendered_amount' => ['sometimes', 'nullable', 'numeric', 'min:0.01', 'max:9999999.99'],
@@ -170,12 +171,18 @@ class BillingController extends Controller
 
         return Idempotency::handle($request, "orders.{$order->id}.checkout", function () use ($request, $user, $order, $validated) {
             return DB::transaction(function () use ($request, $user, $order, $validated) {
-                $shift = $this->requireOpenShift($user);
+                $chargeToOwner = (bool) ($validated['charge_to_owner'] ?? false);
+                if ($chargeToOwner) {
+                    Gate::authorize('manage-floor');
+                }
+                $shift = $chargeToOwner && empty($validated['method'])
+                    ? null
+                    : $this->requireOpenShift($user);
 
                 /** @var Order $lockedOrder */
                 $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
 
-                if ($lockedOrder->status === 'PAID' && $lockedOrder->invoice) {
+                if (in_array($lockedOrder->status, ['PAID', 'OWNER_DUE'], true) && $lockedOrder->invoice) {
                     return response()->json([
                         'data' => $this->loadOrderWithBilling($lockedOrder),
                         'invoice' => $lockedOrder->invoice->load('items'),
@@ -205,7 +212,7 @@ class BillingController extends Controller
                 );
 
                 abort_if(
-                    (float) $lockedOrder->balance_due > 0.001,
+                    ! $chargeToOwner && (float) $lockedOrder->balance_due > 0.001,
                     409,
                     "Cannot finalize invoice while a balance of ৳{$lockedOrder->balance_due} remains unpaid.",
                 );
@@ -224,7 +231,8 @@ class BillingController extends Controller
                     'restaurant_id' => $user->restaurant_id,
                     'order_id' => $lockedOrder->id,
                     'invoice_number' => $invoiceNumber,
-                    'status' => 'ISSUED',
+                    'status' => $chargeToOwner && (float) $lockedOrder->balance_due > 0.001 ? 'OWNER_DUE' : 'ISSUED',
+                    'owner_account' => $chargeToOwner,
                     'guest_count' => $lockedOrder->guest_count,
                     'table_code' => $lockedOrder->table?->code ?? 'TBL',
                     'table_name' => $lockedOrder->table?->display_name ?? 'Table',
@@ -276,7 +284,7 @@ class BillingController extends Controller
                 }
 
                 $lockedOrder->update([
-                    'status' => 'PAID',
+                    'status' => $chargeToOwner && (float) $lockedOrder->balance_due > 0.001 ? 'OWNER_DUE' : 'PAID',
                     'closed_at' => now(),
                     'version' => $lockedOrder->version + 1,
                 ]);
@@ -310,6 +318,72 @@ class BillingController extends Controller
             ->get();
 
         return response()->json(['data' => $invoices]);
+    }
+
+    public function ownerAccount(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($user->can('manage-floor') || $user->can('take-payment') || $user->can('view-reports'), 403);
+
+        $invoices = Invoice::query()
+            ->where('restaurant_id', $user->restaurant_id)
+            ->where('owner_account', true)
+            ->where('status', '!=', 'VOIDED')
+            ->orderByDesc('issued_at')
+            ->get();
+
+        return response()->json([
+            'data' => $invoices,
+            'balance_due' => number_format($invoices->sum(
+                fn (Invoice $invoice) => max(0, (float) $invoice->total - (float) $invoice->paid_amount),
+            ), 2, '.', ''),
+        ]);
+    }
+
+    public function payOwnerInvoice(Request $request, Invoice $invoice): JsonResponse
+    {
+        Gate::authorize('take-payment');
+        $user = $request->user();
+        abort_unless($invoice->restaurant_id === $user->restaurant_id && $invoice->owner_account, 404);
+
+        $validated = $request->validate([
+            'method' => ['required', Rule::in(Payment::METHODS)],
+            'amount' => ['required', 'numeric', 'min:0.01', 'max:9999999.99'],
+            'tendered_amount' => ['nullable', 'numeric', 'min:0.01', 'max:9999999.99'],
+            'provider_reference' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        return Idempotency::handle($request, "owner-account.invoices.{$invoice->id}.payments", function () use ($request, $user, $invoice, $validated) {
+            return DB::transaction(function () use ($request, $user, $invoice, $validated) {
+                $shift = $this->requireOpenShift($user);
+                $lockedInvoice = Invoice::query()->whereKey($invoice->id)->lockForUpdate()->firstOrFail();
+                abort_if($lockedInvoice->status !== 'OWNER_DUE', 409, 'This owner invoice has no outstanding balance.');
+                $order = Order::query()->whereKey($lockedInvoice->order_id)->lockForUpdate()->firstOrFail();
+                $payment = $this->capturePaymentOnLockedOrder($order, $shift, $user, $validated);
+                $order->refresh();
+                $isPaid = (float) $order->balance_due <= 0.001;
+                $order->update(['status' => $isPaid ? 'PAID' : 'OWNER_DUE']);
+                $lockedInvoice->update([
+                    'status' => $isPaid ? 'ISSUED' : 'OWNER_DUE',
+                    'paid_amount' => $order->paid_amount,
+                    'tendered_cash' => number_format((float) $order->payments()->where('status', 'CAPTURED')->where('method', 'CASH')->sum('tendered_amount'), 2, '.', ''),
+                    'change_given' => number_format((float) $order->payments()->where('status', 'CAPTURED')->sum('change_given'), 2, '.', ''),
+                    'payment_snapshot' => $order->payments()->where('status', 'CAPTURED')->orderBy('id')->get()->map(fn (Payment $captured) => [
+                        'id' => $captured->id,
+                        'method' => $captured->method,
+                        'amount' => $captured->amount,
+                        'tendered_amount' => $captured->tendered_amount,
+                        'change_given' => $captured->change_given,
+                        'provider_reference' => $captured->provider_reference,
+                        'captured_at' => $captured->captured_at?->toIso8601String(),
+                    ])->values()->all(),
+                ]);
+                $this->refreshShiftExpectedCash($shift);
+                Audit::record($request, 'owner_account.payment_captured', $payment, after: $payment->toArray());
+
+                return response()->json(['data' => $lockedInvoice->fresh()->load('items')], 201);
+            });
+        });
     }
 
     public function reprintInvoice(Request $request, Invoice $invoice): JsonResponse

@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Invoice extends Model
 {
     protected $fillable = [
-        'restaurant_id', 'order_id', 'invoice_number', 'status', 'guest_count',
+        'restaurant_id', 'order_id', 'invoice_number', 'status', 'owner_account', 'guest_count',
         'table_code', 'table_name', 'waiter_name', 'cashier_name',
         'subtotal', 'discount_amount', 'service_charge', 'tax_amount',
         'total', 'paid_amount', 'refunded_amount', 'tendered_cash', 'change_given',
@@ -21,6 +21,7 @@ class Invoice extends Model
     protected function casts(): array
     {
         return [
+            'owner_account' => 'boolean',
             'subtotal' => 'decimal:2',
             'discount_amount' => 'decimal:2',
             'service_charge' => 'decimal:2',

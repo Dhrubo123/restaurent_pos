@@ -43,27 +43,23 @@ class ReportController extends Controller
         $guestCount = (int) $activeInvoices->sum('guest_count');
         $avgCheck = $invoicesCount > 0 ? round($netRevenue / $invoicesCount, 2) : 0.0;
 
-        $activeOrderIds = $activeInvoices->pluck('order_id')->all();
         $activeInvoiceIds = $activeInvoices->pluck('id')->all();
 
-        $capturedByMethod = empty($activeOrderIds)
-            ? collect()
-            : Payment::query()
-                ->where('restaurant_id', $restaurantId)
-                ->whereIn('order_id', $activeOrderIds)
-                ->where('status', 'CAPTURED')
-                ->selectRaw('method, SUM(amount) as total_amount')
-                ->groupBy('method')
-                ->pluck('total_amount', 'method');
+        $capturedByMethod = Payment::query()
+            ->where('restaurant_id', $restaurantId)
+            ->where('status', 'CAPTURED')
+            ->whereBetween('captured_at', [$fromDate, $toDate])
+            ->whereHas('order.invoice', fn ($query) => $query->where('status', '!=', 'VOIDED'))
+            ->selectRaw('method, SUM(amount) as total_amount')
+            ->groupBy('method')
+            ->pluck('total_amount', 'method');
 
-        $refundedByMethod = empty($activeInvoiceIds)
-            ? collect()
-            : Refund::query()
-                ->where('restaurant_id', $restaurantId)
-                ->whereIn('invoice_id', $activeInvoiceIds)
-                ->selectRaw('method, SUM(amount) as total_amount')
-                ->groupBy('method')
-                ->pluck('total_amount', 'method');
+        $refundedByMethod = Refund::query()
+            ->where('restaurant_id', $restaurantId)
+            ->whereBetween('refunded_at', [$fromDate, $toDate])
+            ->selectRaw('method, SUM(amount) as total_amount')
+            ->groupBy('method')
+            ->pluck('total_amount', 'method');
 
         $paymentsByMethod = [];
         foreach (Payment::METHODS as $method) {
