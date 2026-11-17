@@ -19,8 +19,9 @@ class ReportController extends Controller
     {
         $this->authorizeReports($request);
         $restaurantId = $request->user()->restaurant_id;
+        $restaurantTimezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
 
-        [$fromDate, $toDate] = $this->resolveDateRange($request);
+        [$fromDate, $toDate] = $this->resolveDateRange($request, $restaurantTimezone);
 
         $invoices = Invoice::query()
             ->where('restaurant_id', $restaurantId)
@@ -39,6 +40,9 @@ class ReportController extends Controller
         $refundedTotal = round((float) $activeInvoices->sum(fn (Invoice $i) => (float) $i->refunded_amount), 2);
         $voidedTotal = round((float) $voidedInvoices->sum(fn (Invoice $i) => (float) $i->total), 2);
         $netRevenue = round($billedTotal - $refundedTotal, 2);
+        $ownerDueTotal = round((float) $activeInvoices
+            ->filter(fn (Invoice $invoice) => $invoice->owner_account)
+            ->sum(fn (Invoice $invoice) => max(0.0, (float) $invoice->total - (float) $invoice->paid_amount)), 2);
         $invoicesCount = $activeInvoices->count();
         $guestCount = (int) $activeInvoices->sum('guest_count');
         $avgCheck = $invoicesCount > 0 ? round($netRevenue / $invoicesCount, 2) : 0.0;
@@ -71,6 +75,10 @@ class ReportController extends Controller
                 'net' => number_format(round($captured - $refunded, 2), 2, '.', ''),
             ];
         }
+        $collectedTotal = round(array_sum(array_map(
+            fn (array $methodTotals): float => (float) $methodTotals['net'],
+            $paymentsByMethod,
+        )), 2);
 
         $topItems = empty($activeInvoiceIds)
             ? []
@@ -91,7 +99,7 @@ class ReportController extends Controller
                 ->all();
 
         $dailyBreakdown = $activeInvoices
-            ->groupBy(fn (Invoice $inv) => $inv->issued_at?->format('Y-m-d') ?? now()->format('Y-m-d'))
+            ->groupBy(fn (Invoice $inv) => $inv->issued_at?->copy()->setTimezone($restaurantTimezone)->format('Y-m-d') ?? now($restaurantTimezone)->format('Y-m-d'))
             ->map(function ($dayInvoices, $date) {
                 $billed = round((float) $dayInvoices->sum(fn (Invoice $i) => (float) $i->total), 2);
                 $disc = round((float) $dayInvoices->sum(fn (Invoice $i) => (float) $i->discount_amount), 2);
@@ -123,8 +131,8 @@ class ReportController extends Controller
         return response()->json([
             'data' => [
                 'range' => [
-                    'from' => $fromDate->format('Y-m-d'),
-                    'to' => $toDate->format('Y-m-d'),
+                    'from' => $fromDate->copy()->setTimezone($restaurantTimezone)->format('Y-m-d'),
+                    'to' => $toDate->copy()->setTimezone($restaurantTimezone)->format('Y-m-d'),
                 ],
                 'kpis' => [
                     'invoices_count' => $invoicesCount,
@@ -134,6 +142,8 @@ class ReportController extends Controller
                     'discount_total' => number_format($discountTotal, 2, '.', ''),
                     'tax_total' => number_format($taxTotal, 2, '.', ''),
                     'billed_total' => number_format($billedTotal, 2, '.', ''),
+                    'collected_total' => number_format($collectedTotal, 2, '.', ''),
+                    'owner_due_total' => number_format($ownerDueTotal, 2, '.', ''),
                     'refunded_total' => number_format($refundedTotal, 2, '.', ''),
                     'voided_total' => number_format($voidedTotal, 2, '.', ''),
                     'net_revenue' => number_format($netRevenue, 2, '.', ''),
@@ -152,8 +162,9 @@ class ReportController extends Controller
     {
         $this->authorizeReports($request);
         $restaurantId = $request->user()->restaurant_id;
+        $restaurantTimezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
 
-        [$fromDate, $toDate] = $this->resolveDateRange($request);
+        [$fromDate, $toDate] = $this->resolveDateRange($request, $restaurantTimezone);
 
         $invoices = Invoice::query()
             ->where('restaurant_id', $restaurantId)
@@ -161,7 +172,11 @@ class ReportController extends Controller
             ->orderBy('issued_at')
             ->get();
 
-        $filename = sprintf('sales-report-%s-to-%s.csv', $fromDate->format('Y-m-d'), $toDate->format('Y-m-d'));
+        $filename = sprintf(
+            'sales-report-%s-to-%s.csv',
+            $fromDate->copy()->setTimezone($restaurantTimezone)->format('Y-m-d'),
+            $toDate->copy()->setTimezone($restaurantTimezone)->format('Y-m-d'),
+        );
 
         return response()->streamDownload(function () use ($invoices) {
             $out = fopen('php://output', 'w');
@@ -257,7 +272,7 @@ class ReportController extends Controller
     /**
      * @return array{0: Carbon, 1: Carbon}
      */
-    private function resolveDateRange(Request $request): array
+    private function resolveDateRange(Request $request, string $restaurantTimezone): array
     {
         $validated = $request->validate([
             'from' => ['nullable', 'date_format:Y-m-d'],
@@ -265,18 +280,18 @@ class ReportController extends Controller
         ]);
 
         $from = isset($validated['from'])
-            ? Carbon::createFromFormat('Y-m-d', $validated['from'])->startOfDay()
-            : now()->subDays(6)->startOfDay();
+            ? Carbon::createFromFormat('Y-m-d', $validated['from'], $restaurantTimezone)->startOfDay()
+            : now($restaurantTimezone)->subDays(6)->startOfDay();
 
         $to = isset($validated['to'])
-            ? Carbon::createFromFormat('Y-m-d', $validated['to'])->endOfDay()
-            : now()->endOfDay();
+            ? Carbon::createFromFormat('Y-m-d', $validated['to'], $restaurantTimezone)->endOfDay()
+            : now($restaurantTimezone)->endOfDay();
 
         if ($from->gt($to)) {
             [$from, $to] = [$to->copy()->startOfDay(), $from->copy()->endOfDay()];
         }
 
-        return [$from, $to];
+        return [$from->utc(), $to->utc()];
     }
 
     private function authorizeReports(Request $request): void
