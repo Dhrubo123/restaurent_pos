@@ -618,7 +618,10 @@ export default function CashierWorkspace({
                 </div>
               ) : (
                 <form className="cashier-tender-box" onSubmit={handleSplitPayment}>
-                  <span className="picker-label">Payment Method</span>
+                  <div className="tender-section-heading">
+                    <span className="picker-label">Payment Method</span>
+                    <span className="tender-balance-pill">Due ৳{balanceDue.toFixed(2)}</span>
+                  </div>
                   <div className="tender-methods">
                     {(['CASH', 'CARD', 'BKASH', 'NAGAD'] as const).map((m) => (
                       <button
@@ -704,54 +707,70 @@ export default function CashierWorkspace({
                     </span>
                   )}
 
-                  <div className="field-row">
-                    <label>
-                      Payment amount (৳)
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        max={balanceDue}
-                        required
-                        value={amount}
-                        onChange={(e) => {
-                          setAmount(e.target.value)
-                          if (tendered === amount) {
-                            setTendered(e.target.value)
-                          }
-                        }}
-                      />
+                  <div className="tender-amount-grid">
+                    <label className="tender-amount-card">
+                      <span className="tender-amount-title">Amount to pay</span>
+                      <span className="tender-amount-input-wrap">
+                        <span aria-hidden="true">৳</span>
+                        <input
+                          className="tender-amount-input"
+                          aria-label="Payment amount in taka"
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          min="0.01"
+                          max={balanceDue}
+                          required
+                          value={amount}
+                          onChange={(e) => {
+                            setAmount(e.target.value)
+                            if (tendered === amount) {
+                              setTendered(e.target.value)
+                            }
+                          }}
+                        />
+                      </span>
+                      <small>Applied to this bill</small>
                     </label>
 
                     {method === 'CASH' ? (
-                      <label>
-                        Cash tendered (৳)
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0.01"
-                          required
-                          value={tendered}
-                          onChange={(e) => setTendered(e.target.value)}
-                        />
+                      <label className="tender-amount-card tender-cash-card">
+                        <span className="tender-amount-title">Cash received</span>
+                        <span className="tender-amount-input-wrap">
+                          <span aria-hidden="true">৳</span>
+                          <input
+                            className="tender-amount-input"
+                            aria-label="Cash received from customer in taka"
+                            type="number"
+                            inputMode="decimal"
+                            step="0.01"
+                            min="0.01"
+                            required
+                            value={tendered}
+                            onChange={(e) => setTendered(e.target.value)}
+                          />
+                        </span>
+                        <small>Money handed over by guest</small>
                       </label>
                     ) : (
-                      <label>
-                        {method} Reference / TrxID
+                      <label className="tender-amount-card">
+                        <span className="tender-amount-title">{method} Reference / TrxID</span>
                         <input
+                          className="tender-reference-input"
                           required
                           minLength={3}
                           placeholder={`Enter ${method} reference`}
                           value={providerRef}
                           onChange={(e) => setProviderRef(e.target.value)}
                         />
+                        <small>Required to record this payment</small>
                       </label>
                     )}
                   </div>
 
-                  {method === 'CASH' && changePreview > 0 && (
-                    <div className="change-callout">
-                      <span>Change to return to guest:</span>
+                  {method === 'CASH' && (
+                    <div className="change-callout" aria-live="polite">
+                      <span>Change to return</span>
                       <strong>৳{changePreview.toFixed(2)}</strong>
                     </div>
                   )}
