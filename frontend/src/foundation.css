@@ -446,18 +446,21 @@
 }
 .cashier-tender-box{
   display:grid;
-  gap:10px;
-  padding:14px 18px;
+  gap:14px;
+  padding:18px;
   border-top:1px solid var(--line);
-  background:#fbfaf7;
+  background:#fcfaf6;
 }
+.tender-section-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.tender-section-heading .picker-label{margin:0}
+.tender-balance-pill{padding:7px 11px;border:1px solid #f0d2bd;border-radius:999px;background:#fff1e6;color:var(--coral-dark);font-size:12px;font-weight:800;white-space:nowrap}
 .tender-methods{
   display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:6px;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;
 }
 .tender-methods button{
-  min-height:38px;
+  min-height:46px;
   padding:6px 8px;
   border:1px solid var(--line);
   border-radius:9px;
@@ -470,7 +473,20 @@
   border-color:var(--ink);
   background:var(--ink);
   color:#fff;
+  box-shadow:0 4px 10px #1c191726;
 }
+.tender-amount-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.tender-amount-card{display:grid;align-content:start;gap:8px;min-width:0;margin:0;padding:13px;border:1px solid var(--line);border-radius:14px;background:#fff}
+.tender-cash-card{border-color:#f0c6a5;background:#fff8f1}
+.tender-amount-title{color:#423a34;font-size:13px;font-weight:800}
+.tender-amount-card small{color:var(--muted);font-size:11px;line-height:1.35}
+.tender-amount-input-wrap{display:flex;align-items:center;gap:8px;min-height:54px;padding:0 12px;border:1.5px solid #dccfc0;border-radius:11px;background:#fff;color:var(--coral-dark);font-size:1.35rem;font-weight:800}
+.tender-amount-input-wrap:focus-within{border-color:var(--coral);box-shadow:0 0 0 3px #ec6b1e24}
+.tender-amount-input{width:100%;min-width:0;height:50px;padding:0;border:0;outline:0;background:transparent;color:var(--ink);font-size:1.35rem;font-weight:800;font-variant-numeric:tabular-nums}
+.tender-amount-input::-webkit-inner-spin-button,.tender-amount-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.tender-amount-input[type=number]{appearance:textfield;-moz-appearance:textfield}
+.tender-reference-input{width:100%;min-width:0;min-height:54px;padding:0 12px;border:1.5px solid #dccfc0;border-radius:11px;background:#fff;font-size:14px}
+.tender-reference-input:focus{outline:0;border-color:var(--coral);box-shadow:0 0 0 3px #ec6b1e24}
 .quick-cash-pills{
   display:flex;
   flex-wrap:wrap;
@@ -487,17 +503,20 @@
   font-weight:800;
 }
 .quick-cash-pills button:hover{border-color:var(--coral);color:var(--coral-dark)}
+.cashier-tender-box .quick-cash-pills button{min-height:42px;padding:7px 13px;font-size:13px}
 .change-callout{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  padding:8px 12px;
+  padding:12px 14px;
   border-radius:10px;
   background:#eaf6ef;
   border:1px solid #bfe2cd;
   color:var(--green);
   font-size:13px;
 }
+.cashier-tender-box .change-callout strong{font-size:1.2rem;font-variant-numeric:tabular-nums}
+@media(max-width:560px){.tender-amount-grid{grid-template-columns:1fr}.tender-methods{gap:5px}.tender-methods button{padding:6px 3px;font-size:11px}}
 .cashier-cta-stack{
   display:grid;
   gap:8px;
@@ -609,6 +628,9 @@
 
 /* Reports, Refunds & Immutable Audit Log */
 .reports-workspace{display:grid;gap:20px}
+.reports-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:980px){.reports-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.reports-summary-grid{grid-template-columns:1fr}}
 .reports-toolbar{
   display:flex;
   flex-wrap:wrap;
