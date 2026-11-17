@@ -2,6 +2,17 @@ import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { InvoiceRecord, RefundRecord } from './InvoicePrintModal.tsx'
 
+function cafeDate(timestamp: number): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Dhaka',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(timestamp))
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  return `${value('year')}-${value('month')}-${value('day')}`
+}
+
 export type ReportSummaryData = {
   range: { from: string; to: string }
   kpis: {
@@ -12,6 +23,8 @@ export type ReportSummaryData = {
     discount_total: string
     tax_total: string
     billed_total: string
+    collected_total: string
+    owner_due_total: string
     refunded_total: string
     voided_total: string
     net_revenue: string
@@ -87,8 +100,8 @@ export default function ReportsWorkspace({
   onRefundInvoice,
   onViewInvoice,
 }: Props) {
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const sevenDaysAgoStr = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10)
+  const todayStr = cafeDate(Date.now())
+  const sevenDaysAgoStr = cafeDate(Date.now() - 6 * 86400000)
 
   const [subTab, setSubTab] = useState<'overview' | 'invoices' | 'audit'>('overview')
   const [fromDate, setFromDate] = useState(report?.range.from ?? sevenDaysAgoStr)
@@ -108,24 +121,23 @@ export default function ReportsWorkspace({
   } | null>(null)
 
   const applyPreset = (daysBack: number) => {
-    const end = new Date().toISOString().slice(0, 10)
-    const start = new Date(Date.now() - daysBack * 86400000).toISOString().slice(0, 10)
+    const end = cafeDate(Date.now())
+    const start = cafeDate(Date.now() - daysBack * 86400000)
     setFromDate(start)
     setToDate(end)
     void onLoadReport(start, end)
   }
 
   const applyYesterday = () => {
-    const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const y = cafeDate(Date.now() - 86400000)
     setFromDate(y)
     setToDate(y)
     void onLoadReport(y, y)
   }
 
   const applyThisMonth = () => {
-    const now = new Date()
-    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-    const end = now.toISOString().slice(0, 10)
+    const end = cafeDate(Date.now())
+    const start = `${end.slice(0, 7)}-01`
     setFromDate(start)
     setToDate(end)
     void onLoadReport(start, end)
@@ -287,19 +299,33 @@ export default function ReportsWorkspace({
 
       {subTab === 'overview' && kpis && (
         <>
-          <section className="summary-grid">
-            <article>
-              <span className="summary-icon green">৳</span>
-              <div>
-                <strong>৳{Number(kpis.net_revenue).toFixed(0)}</strong>
-                <p>Net Revenue ({kpis.invoices_count} checks)</p>
-              </div>
-            </article>
+          <section className="summary-grid reports-summary-grid">
             <article>
               <span className="summary-icon blue">▤</span>
               <div>
                 <strong>৳{Number(kpis.billed_total).toFixed(0)}</strong>
-                <p>Billed Gross · Avg ৳{Number(kpis.avg_check).toFixed(0)}</p>
+                <p>Billed Sales · {kpis.invoices_count} checks</p>
+              </div>
+            </article>
+            <article>
+              <span className="summary-icon green">৳</span>
+              <div>
+                <strong>৳{Number(kpis.collected_total).toFixed(0)}</strong>
+                <p>Collected in selected period · after refunds</p>
+              </div>
+            </article>
+            <article>
+              <span className="summary-icon amber">◷</span>
+              <div>
+                <strong>৳{Number(kpis.owner_due_total).toFixed(0)}</strong>
+                <p>Owner Due · outstanding on bills in range</p>
+              </div>
+            </article>
+            <article>
+              <span className="summary-icon green">↗</span>
+              <div>
+                <strong>৳{Number(kpis.net_revenue).toFixed(0)}</strong>
+                <p>Net Revenue · billed less refunds</p>
               </div>
             </article>
             <article>
@@ -325,8 +351,8 @@ export default function ReportsWorkspace({
           <div className="reports-two-col">
             <section className="zone-section">
               <div className="zone-title">
-                <h2>Payment Method Reconciliation</h2>
-                <span>Captured − Refunded = Net</span>
+                <h2>Daily Collections by Payment Method</h2>
+                <span>Payments and refunds dated in the selected period</span>
               </div>
               <div className="reports-table-wrap">
                 <table className="reports-table">
@@ -356,6 +382,11 @@ export default function ReportsWorkspace({
                         </tr>
                       )
                     })}
+                    <tr>
+                      <td><strong>Total Collected</strong></td>
+                      <td colSpan={2}>All payment methods after refunds</td>
+                      <td><strong>৳{Number(kpis.collected_total).toFixed(2)}</strong></td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -627,7 +658,7 @@ export default function ReportsWorkspace({
                   { label: 'All Events', value: '' },
                   { label: 'Invoices & Refunds', value: 'invoice.' },
                   { label: 'Discounts', value: 'order.discount' },
-                  { label: 'Cashier Shifts', value: 'shift.' },
+                  { label: 'Cash Register', value: 'shift.' },
                   { label: 'Orders & Transfers', value: 'order.' },
                   { label: 'KOTs', value: 'kot' },
                   { label: 'Menu & Pricing', value: 'menu' },
@@ -724,7 +755,7 @@ export default function ReportsWorkspace({
             <p className="muted" style={{ margin: 0 }}>
               Voiding marks {voidModal.invoice.invoice_number} (৳
               {Number(voidModal.invoice.total).toFixed(2)}) as <strong>VOIDED</strong>, reverses its captured
-              shift payments, and permanently retains the invoice number in the audit sequence.
+              its captured payments, and permanently retains the invoice number in the audit sequence.
             </p>
             <label>
               Mandatory manager reason for voiding
