@@ -346,10 +346,10 @@ h1, h2, h3 { font-family: Manrope, sans-serif; }
 .status-open { border-color: #f3c6a8; }
 .status-open .status-dot { background: #ec6b1e; box-shadow: 0 0 0 4px rgba(236, 107, 30, 0.18); }
 .status-open .table-status strong { color: #d4580f; }
-.status-bill_requested { border-color: #ecd9ae; }
-.status-bill_requested .status-dot { background: #c39133; }
-.status-bill_requested .table-status strong { color: #a27117; }
-.status-partially_paid .status-dot { background: #8465a0; }
+.status-bill_requested { border-color: #b9dfd1; }
+.status-bill_requested .status-dot { background: #23855f; }
+.status-bill_requested .table-status strong { color: #18704f; }
+.status-partially_paid .status-dot { background: #23855f; }
 .status-inactive { opacity: .55; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: rgba(20, 18, 16, 0.68); backdrop-filter: blur(3px); }

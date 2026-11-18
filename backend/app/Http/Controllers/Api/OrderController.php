@@ -312,6 +312,16 @@ class OrderController extends Controller
                 'cancel_reason' => $cancellationReason,
             ]);
 
+            foreach ($locked->kots()->where('status', '!=', 'CANCELLED')->get() as $kot) {
+                $kot->items()->where('status', '!=', 'CANCELLED')->update([
+                    'status' => 'CANCELLED',
+                    'cancel_reason' => $cancellationReason,
+                    'cancelled_by' => $request->user()->id,
+                    'cancelled_at' => now(),
+                ]);
+                $kot->update(['status' => 'CANCELLED']);
+            }
+
             $locked->update([
                 'status' => 'CANCELLED',
                 'closed_at' => now(),

@@ -13,6 +13,7 @@ use App\Models\Refund;
 use App\Models\User;
 use App\Support\Audit;
 use App\Support\Idempotency;
+use App\Support\InventoryStock;
 use App\Support\OrderTotals;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -265,11 +266,24 @@ class BillingController extends Controller
                         continue;
                     }
 
+                    $unsentQty = round(
+                        max(0.0, $effectiveQty - (float) $line->sent_quantity),
+                        3,
+                    );
+                    if ($unsentQty > 0) {
+                        InventoryStock::deductForDirectCheckoutItem($line, $unsentQty, $invoice, $user->id);
+                        $line->update([
+                            'sent_quantity' => number_format($effectiveQty, 3, '.', ''),
+                            'status' => $line->status === 'DRAFT' ? 'SERVED' : $line->status,
+                        ]);
+                    }
+
                     InvoiceItem::query()->create([
                         'invoice_id' => $invoice->id,
                         'sku' => $line->sku,
                         'item_name' => $line->item_name,
                         'variant_name' => $line->variant_name,
+                        'station' => $line->station,
                         'quantity' => number_format($effectiveQty, 3, '.', ''),
                         'unit_price' => $line->unit_price,
                         'modifier_unit_total' => $line->modifier_unit_total,

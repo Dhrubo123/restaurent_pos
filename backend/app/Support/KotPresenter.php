@@ -19,7 +19,7 @@ final class KotPresenter
             'order.waiter:id,name',
             'order.restaurant:id,name',
             'round.sender:id,name',
-            'items',
+            'items.canceller:id,name',
         ]);
 
         return [
@@ -64,6 +64,7 @@ final class KotPresenter
                 ),
                 'status' => $item->status,
                 'cancel_reason' => $item->cancel_reason,
+                'cancelled_by_name' => $item->canceller?->name,
                 'started_at' => $item->started_at,
                 'ready_at' => $item->ready_at,
                 'served_at' => $item->served_at,

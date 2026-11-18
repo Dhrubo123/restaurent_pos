@@ -10,11 +10,14 @@ class Restaurant extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'timezone', 'currency_code', 'active'];
+    protected $fillable = ['name', 'timezone', 'currency_code', 'owner_monthly_budget', 'active'];
 
     protected function casts(): array
     {
-        return ['active' => 'boolean'];
+        return [
+            'active' => 'boolean',
+            'owner_monthly_budget' => 'decimal:2',
+        ];
     }
 
     public function zones(): HasMany

@@ -5,12 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AuditEvent;
 use App\Models\Invoice;
-use App\Models\InvoiceItem;
+use App\Models\OrderItem;
 use App\Models\Payment;
 use App\Models\Refund;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ReportController extends Controller
@@ -47,8 +48,6 @@ class ReportController extends Controller
         $guestCount = (int) $activeInvoices->sum('guest_count');
         $avgCheck = $invoicesCount > 0 ? round($netRevenue / $invoicesCount, 2) : 0.0;
 
-        $activeInvoiceIds = $activeInvoices->pluck('id')->all();
-
         $capturedByMethod = Payment::query()
             ->where('restaurant_id', $restaurantId)
             ->where('status', 'CAPTURED')
@@ -80,23 +79,7 @@ class ReportController extends Controller
             $paymentsByMethod,
         )), 2);
 
-        $topItems = empty($activeInvoiceIds)
-            ? []
-            : InvoiceItem::query()
-                ->whereIn('invoice_id', $activeInvoiceIds)
-                ->selectRaw('sku, item_name, SUM(quantity) as quantity_sold, SUM(line_subtotal) as gross_revenue')
-                ->groupBy('sku', 'item_name')
-                ->orderByDesc('gross_revenue')
-                ->limit(15)
-                ->get()
-                ->map(fn ($row) => [
-                    'sku' => $row->sku,
-                    'item_name' => $row->item_name,
-                    'quantity_sold' => number_format((float) $row->quantity_sold, 0, '.', ''),
-                    'gross_revenue' => number_format((float) $row->gross_revenue, 2, '.', ''),
-                ])
-                ->values()
-                ->all();
+        $stationSales = $this->stationSales($activeInvoices, $restaurantTimezone);
 
         $dailyBreakdown = $activeInvoices
             ->groupBy(fn (Invoice $inv) => $inv->issued_at?->copy()->setTimezone($restaurantTimezone)->format('Y-m-d') ?? now($restaurantTimezone)->format('Y-m-d'))
@@ -128,6 +111,10 @@ class ReportController extends Controller
             ->limit(50)
             ->get();
 
+        $voidedItems = $this->hasUnlimitedReportAccess($request)
+            ? $this->voidedItemLedger($restaurantId, $fromDate, $toDate)
+            : [];
+
         return response()->json([
             'data' => [
                 'range' => [
@@ -150,10 +137,11 @@ class ReportController extends Controller
                     'avg_check' => number_format($avgCheck, 2, '.', ''),
                 ],
                 'payments_by_method' => $paymentsByMethod,
-                'top_items' => $topItems,
+                'station_sales' => $stationSales,
                 'daily_breakdown' => $dailyBreakdown,
                 'invoices' => $invoices->values()->all(),
                 'refunds' => $refunds,
+                'voided_items' => $voidedItems,
             ],
         ]);
     }
@@ -243,6 +231,12 @@ class ReportController extends Controller
             ->with('actor:id,name')
             ->latest('id');
 
+        if (! $this->hasUnlimitedReportAccess($request)) {
+            $restaurantTimezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
+            $query->where('created_at', '>=', now($restaurantTimezone)->subDays(6)->startOfDay()->utc());
+            $query->where('action', '!=', 'order_item.sent_cancelled');
+        }
+
         if ($actionFilter !== '') {
             $query->where('action', 'like', $actionFilter.'%');
         }
@@ -270,6 +264,182 @@ class ReportController extends Controller
     }
 
     /**
+     * Build the owner/admin-only ledger for sent items voided by supervisors.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function voidedItemLedger(int $restaurantId, Carbon $fromDate, Carbon $toDate): array
+    {
+        $events = AuditEvent::query()
+            ->where('restaurant_id', $restaurantId)
+            ->where('action', 'order_item.sent_cancelled')
+            ->whereBetween('created_at', [$fromDate, $toDate])
+            ->with('actor:id,name')
+            ->latest('id')
+            ->limit(200)
+            ->get();
+
+        $items = OrderItem::query()
+            ->where('restaurant_id', $restaurantId)
+            ->whereIn('id', $events->pluck('auditable_id'))
+            ->with([
+                'order.table:id,code,display_name',
+                'order.items' => fn ($q) => $q->where('status', '!=', 'CANCELLED')->orderBy('id'),
+                'order.kots' => fn ($q) => $q->orderBy('id'),
+                'kotItems.kot:id,kot_number,station,status',
+            ])
+            ->get()
+            ->keyBy('id');
+
+        return $events->map(function (AuditEvent $event) use ($items): array {
+            /** @var OrderItem|null $item */
+            $item = $items->get($event->auditable_id);
+            $kots = $item?->kotItems
+                ->map(fn ($kotItem) => $kotItem->kot)
+                ->filter()
+                ->unique('id')
+                ->values() ?? collect();
+
+            $voidKotIds = $kots->pluck('id')->all();
+            $replacementItems = ($item?->order?->items ?? collect())
+                ->where('id', '!=', $item?->id)
+                ->map(fn (OrderItem $activeLine): array => [
+                    'id' => $activeLine->id,
+                    'item_name' => $activeLine->item_name,
+                    'variant_name' => $activeLine->variant_name,
+                    'quantity' => (string) $activeLine->quantity,
+                    'line_total' => (string) $activeLine->line_total,
+                ])
+                ->values()
+                ->all();
+
+            $replacementKots = ($item?->order?->kots ?? collect())
+                ->whereNotIn('id', $voidKotIds)
+                ->map(fn ($kot): array => [
+                    'id' => $kot->id,
+                    'kot_number' => $kot->kot_number,
+                    'station' => $kot->station,
+                    'status' => $kot->status,
+                ])
+                ->values()
+                ->all();
+
+            return [
+                'id' => $event->id,
+                'order_item_id' => $event->auditable_id,
+                'order_number' => $item?->order?->order_number ?? 'Unknown order',
+                'table_code' => $item?->order?->table?->code ?? 'Takeaway',
+                'table_name' => $item?->order?->table?->display_name,
+                'item_name' => $item?->item_name ?? 'Deleted menu item',
+                'variant_name' => $item?->variant_name,
+                'station' => $item?->station ?? $kots->first()?->station,
+                'quantity' => (string) ($item?->cancelled_quantity ?? $event->after['cancelled_quantity'] ?? 0),
+                'original_total' => number_format((float) ($event->before['line_total'] ?? 0), 2, '.', ''),
+                'reason' => $event->reason,
+                'voided_by' => $event->actor?->name ?? 'System',
+                'voided_at' => $event->created_at?->toIso8601String(),
+                'kots' => $kots->map(fn ($kot): array => [
+                    'id' => $kot->id,
+                    'kot_number' => $kot->kot_number,
+                    'station' => $kot->station,
+                    'status' => $kot->status,
+                ])->all(),
+                'replacement_items' => $replacementItems,
+                'replacement_kots' => $replacementKots,
+            ];
+        })->all();
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    private function stationSales(Collection $invoices, string $restaurantTimezone): array
+    {
+        $sales = [];
+        foreach (['KITCHEN', 'BAR', 'UNASSIGNED'] as $station) {
+            $sales[$station] = [
+                'billed_cents' => 0,
+                'gross_cents' => 0,
+                'quantity' => 0.0,
+                'days' => [],
+                'items' => [],
+            ];
+        }
+
+        foreach ($invoices as $invoice) {
+            $lines = $invoice->items->values();
+            $basis = (float) $lines->sum('line_subtotal');
+            $remainingCents = (int) round((float) $invoice->total * 100);
+            $date = $invoice->issued_at?->copy()->setTimezone($restaurantTimezone)->format('Y-m-d');
+
+            if ($lines->isEmpty()) {
+                $sales['UNASSIGNED']['billed_cents'] += $remainingCents;
+                if ($date) {
+                    $sales['UNASSIGNED']['days'][$date] ??= ['billed_cents' => 0, 'quantity' => 0.0];
+                    $sales['UNASSIGNED']['days'][$date]['billed_cents'] += $remainingCents;
+                }
+
+                continue;
+            }
+
+            foreach ($lines as $index => $line) {
+                $grossCents = (int) round((float) $line->line_subtotal * 100);
+                $billedCents = $index === $lines->count() - 1
+                    ? $remainingCents
+                    : ($basis > 0 ? (int) round((float) $invoice->total * 100 * (float) $line->line_subtotal / $basis) : 0);
+                $remainingCents -= $billedCents;
+                $station = in_array($line->station, ['KITCHEN', 'BAR'], true) ? $line->station : 'UNASSIGNED';
+                $sales[$station]['billed_cents'] += $billedCents;
+                $sales[$station]['gross_cents'] += $grossCents;
+                $sales[$station]['quantity'] += (float) $line->quantity;
+
+                if ($date) {
+                    $sales[$station]['days'][$date] ??= ['billed_cents' => 0, 'quantity' => 0.0];
+                    $sales[$station]['days'][$date]['billed_cents'] += $billedCents;
+                    $sales[$station]['days'][$date]['quantity'] += (float) $line->quantity;
+                }
+
+                $key = $line->sku."\0".$line->item_name;
+                $sales[$station]['items'][$key] ??= [
+                    'sku' => $line->sku,
+                    'item_name' => $line->item_name,
+                    'quantity' => 0.0,
+                    'gross_cents' => 0,
+                ];
+                $sales[$station]['items'][$key]['quantity'] += (float) $line->quantity;
+                $sales[$station]['items'][$key]['gross_cents'] += $grossCents;
+            }
+        }
+
+        foreach ($sales as &$station) {
+            $days = $station['days'];
+            krsort($days);
+            $items = array_values($station['items']);
+            usort($items, fn (array $a, array $b): int => $b['gross_cents'] <=> $a['gross_cents']);
+
+            $station = [
+                'billed_total' => number_format($station['billed_cents'] / 100, 2, '.', ''),
+                'gross_subtotal' => number_format($station['gross_cents'] / 100, 2, '.', ''),
+                'quantity_sold' => number_format($station['quantity'], 3, '.', ''),
+                'daily_breakdown' => collect($days)->map(fn (array $day, string $date): array => [
+                    'date' => $date,
+                    'billed_total' => number_format($day['billed_cents'] / 100, 2, '.', ''),
+                    'quantity_sold' => number_format($day['quantity'], 3, '.', ''),
+                ])->values()->all(),
+                'items' => collect($items)->map(fn (array $item): array => [
+                    'sku' => $item['sku'],
+                    'item_name' => $item['item_name'],
+                    'quantity_sold' => number_format($item['quantity'], 3, '.', ''),
+                    'gross_revenue' => number_format($item['gross_cents'] / 100, 2, '.', ''),
+                ])->all(),
+            ];
+        }
+        unset($station);
+
+        return $sales;
+    }
+
+    /**
      * @return array{0: Carbon, 1: Carbon}
      */
     private function resolveDateRange(Request $request, string $restaurantTimezone): array
@@ -291,7 +461,22 @@ class ReportController extends Controller
             [$from, $to] = [$to->copy()->startOfDay(), $from->copy()->endOfDay()];
         }
 
+        if (! $this->hasUnlimitedReportAccess($request)) {
+            $today = now($restaurantTimezone)->endOfDay();
+            $earliestDay = $today->copy()->subDays(6)->startOfDay();
+            abort_if(
+                $from->lt($earliestDay) || $to->gt($today),
+                403,
+                'Supervisors can view reports only for dates within the most recent 7 days.',
+            );
+        }
+
         return [$from->utc(), $to->utc()];
+    }
+
+    private function hasUnlimitedReportAccess(Request $request): bool
+    {
+        return $request->user()->roles()->where('key', 'admin')->exists();
     }
 
     private function authorizeReports(Request $request): void
@@ -300,7 +485,7 @@ class ReportController extends Controller
         abort_unless(
             $user->can('view-reports') || $user->can('manage-floor') || $user->can('manage-menu'),
             403,
-            'Manager permission is required to view financial reports and audit logs.',
+            'Report permission is required to view financial reports and audit logs.',
         );
     }
 }

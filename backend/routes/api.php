@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\MenuSubcategoryController;
 use App\Http\Controllers\Api\ModifierGroupController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\OrderItemController;
+use App\Http\Controllers\Api\OwnerMealController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\ZoneActivationController;
@@ -45,6 +46,9 @@ Route::prefix('v1')->middleware('web')->group(function () {
 
         Route::get('/invoices', [BillingController::class, 'invoices']);
         Route::get('/owner-account', [BillingController::class, 'ownerAccount']);
+        Route::get('/owner-meals', [OwnerMealController::class, 'index']);
+        Route::post('/owner-meals', [OwnerMealController::class, 'store']);
+        Route::post('/owner-meals/budget', [OwnerMealController::class, 'updateBudget']);
         Route::post('/invoices/{invoice}/void', [BillingController::class, 'voidInvoice']);
         Route::post('/invoices/{invoice}/refunds', [BillingController::class, 'refundInvoice']);
 
@@ -98,6 +102,7 @@ Route::prefix('v1')->middleware('web')->group(function () {
             Route::patch('/orders/{order}/items/{orderItem}', [OrderItemController::class, 'update']);
             Route::delete('/orders/{order}/items/{orderItem}', [OrderItemController::class, 'destroy']);
             Route::post('/orders/{order}/items/{orderItem}/cancel', [OrderItemController::class, 'cancelSent']);
+            Route::post('/orders/{order}/items/{orderItem}/transfer', [OrderItemController::class, 'transfer']);
         });
 
         Route::middleware('can:manage-floor')->group(function () {

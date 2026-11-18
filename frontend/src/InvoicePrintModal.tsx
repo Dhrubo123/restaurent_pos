@@ -8,13 +8,45 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
     (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk/i.test(navigator.userAgent) ||
       (navigator.maxTouchPoints > 1 && window.innerWidth <= 1280))
 
-  if (!paperWrapEl || isMobileOrTablet) {
+  if (!paperWrapEl) {
     const prevTitle = document.title
     document.title = docTitle
     window.print()
     setTimeout(() => {
       document.title = prevTitle
     }, 500)
+    return
+  }
+
+  if (isMobileOrTablet) {
+    document.querySelector('.thermal-print-root')?.remove()
+
+    const printRoot = document.createElement('div')
+    printRoot.className = 'thermal-print-root'
+    printRoot.setAttribute('aria-hidden', 'true')
+    printRoot.innerHTML = paperWrapEl.innerHTML
+    document.body.appendChild(printRoot)
+    document.body.classList.add('thermal-print-active')
+    document.documentElement.classList.add('thermal-print-active')
+
+    const prevTitle = document.title
+    let cleaned = false
+    const cleanup = () => {
+      if (cleaned) return
+      cleaned = true
+      document.title = prevTitle
+      document.body.classList.remove('thermal-print-active')
+      document.documentElement.classList.remove('thermal-print-active')
+      printRoot.remove()
+    }
+
+    window.addEventListener('afterprint', cleanup, { once: true })
+    document.title = docTitle
+    window.print()
+
+    // Some Android WebViews do not dispatch afterprint. This is only a safety cleanup;
+    // the cloned receipt is hidden outside print media and cannot affect the POS screen.
+    setTimeout(cleanup, 120000)
     return
   }
 

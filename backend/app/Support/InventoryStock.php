@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\InventoryItem;
+use App\Models\Invoice;
 use App\Models\Kot;
 use App\Models\MenuItem;
 use App\Models\MenuItemIngredient;
@@ -57,6 +58,60 @@ final class InventoryStock
                 'reference_type' => Kot::class,
                 'reference_id' => $kot->id,
                 'reason' => "KOT {$kot->kot_number} · {$deltaQty}x {$orderItem->item_name}",
+                'actor_id' => $actorId,
+                'occurred_at' => now(),
+            ]);
+
+            self::evaluateAutoEightySix($invItem);
+        }
+    }
+
+    public static function deductForDirectCheckoutItem(
+        OrderItem $orderItem,
+        float $deltaQty,
+        Invoice $invoice,
+        int $actorId,
+    ): void {
+        if (! $orderItem->menu_item_id || $deltaQty <= 0) {
+            return;
+        }
+
+        $recipes = MenuItemIngredient::query()
+            ->where('restaurant_id', $orderItem->restaurant_id)
+            ->where('menu_item_id', $orderItem->menu_item_id)
+            ->get();
+
+        foreach ($recipes as $recipe) {
+            /** @var InventoryItem|null $invItem */
+            $invItem = InventoryItem::query()
+                ->whereKey($recipe->inventory_item_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $invItem || ! $invItem->active) {
+                continue;
+            }
+
+            $deduction = round((float) $recipe->quantity * $deltaQty, 3);
+            if ($deduction <= 0) {
+                continue;
+            }
+
+            $newStock = round((float) $invItem->current_stock - $deduction, 3);
+            $invItem->update([
+                'current_stock' => number_format($newStock, 3, '.', ''),
+            ]);
+
+            StockMovement::query()->create([
+                'restaurant_id' => $orderItem->restaurant_id,
+                'inventory_item_id' => $invItem->id,
+                'type' => 'SALE_DEDUCTION',
+                'quantity_delta' => number_format(-$deduction, 3, '.', ''),
+                'stock_after' => number_format($newStock, 3, '.', ''),
+                'unit_cost' => $invItem->unit_cost,
+                'reference_type' => Invoice::class,
+                'reference_id' => $invoice->id,
+                'reason' => "Invoice {$invoice->invoice_number} · {$deltaQty}x {$orderItem->item_name}",
                 'actor_id' => $actorId,
                 'occurred_at' => now(),
             ]);

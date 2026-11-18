@@ -151,6 +151,7 @@ type Props = {
   onViewOrderKot: (kotId: number) => Promise<void>
   onRequestBill: (order: OrderRecord) => Promise<void>
   onTransferOrder: (order: OrderRecord, toTableId: number, reason: string) => Promise<boolean>
+  onTransferItem: (order: OrderRecord, item: OrderItemRecord, toTableId: number, reason: string) => Promise<boolean>
   onMergeOrder: (order: OrderRecord, targetOrderId: number, reason: string) => Promise<boolean>
   onCancelOrder: (order: OrderRecord, reason: string) => Promise<boolean>
   onOpenCashier?: () => void
@@ -176,6 +177,7 @@ export default function OrderWorkspace({
   onViewOrderKot,
   onRequestBill,
   onTransferOrder,
+  onTransferItem,
   onMergeOrder,
   onCancelOrder,
   onOpenCashier,
@@ -190,6 +192,7 @@ export default function OrderWorkspace({
   const [newGuestCount, setNewGuestCount] = useState(2)
 
   const [transferModal, setTransferModal] = useState<{ toTableId: string; reason: string } | null>(null)
+  const [itemTransferModal, setItemTransferModal] = useState<{ item: OrderItemRecord; toTableId: string; reason: string } | null>(null)
   const [mergeModal, setMergeModal] = useState<{ targetOrderId: string; reason: string } | null>(null)
   const [cancelModal, setCancelModal] = useState<{ reason: string } | null>(null)
   const [cancelItemModal, setCancelItemModal] = useState<{ item: OrderItemRecord; reason: string } | null>(null)
@@ -198,6 +201,13 @@ export default function OrderWorkspace({
   const availableTables = useMemo(
     () => tables.filter((t) => t.active && t.status === 'AVAILABLE'),
     [tables],
+  )
+
+  const itemTransferTables = useMemo(
+    () => tables.filter((table) => table.active && ['AVAILABLE', 'OPEN', 'BILL_REQUESTED'].includes(table.status) && !(
+      selectedOrder?.merged_dining_table_ids ?? [selectedOrder?.dining_table_id]
+    ).includes(table.id)),
+    [tables, selectedOrder],
   )
 
   const otherOpenOrders = useMemo(
@@ -279,6 +289,13 @@ export default function OrderWorkspace({
     if (ok) {
       setTransferModal(null)
     }
+  }
+
+  const submitItemTransfer = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selectedOrder || !itemTransferModal || !itemTransferModal.toTableId) return
+    const ok = await onTransferItem(selectedOrder, itemTransferModal.item, Number(itemTransferModal.toTableId), itemTransferModal.reason)
+    if (ok) setItemTransferModal(null)
   }
 
   const submitMerge = async (event: FormEvent) => {
@@ -625,6 +642,18 @@ export default function OrderWorkspace({
                             )}
                           </div>
                         )}
+                        <button
+                          type="button"
+                          className="secondary compact"
+                          disabled={busy || Number(selectedOrder.paid_amount) > 0 || line.status === 'SERVED' || itemTransferTables.length === 0}
+                          onClick={() => setItemTransferModal({
+                            item: line,
+                            toTableId: String(itemTransferTables[0]?.id ?? ''),
+                            reason: '',
+                          })}
+                        >
+                          Move item
+                        </button>
                       </div>
                     </article>
                   )
@@ -913,6 +942,35 @@ export default function OrderWorkspace({
               <button className="primary" disabled={busy}>
                 {busy ? 'Transferring…' : 'Confirm transfer'}
               </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {itemTransferModal && selectedOrder && (
+        <div className="modal-backdrop" onMouseDown={() => setItemTransferModal(null)}>
+          <form className="modal" onSubmit={submitItemTransfer} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <p className="eyebrow coral">MOVE ONE ORDER LINE</p>
+                <h2>{itemTransferModal.item.item_name}</h2>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setItemTransferModal(null)}>×</button>
+            </div>
+            <p>Move the full line ({Number(itemTransferModal.item.quantity)} item(s)) and its charge to another table. An available table will get a new check.</p>
+            <label>
+              Destination table
+              <select required value={itemTransferModal.toTableId} onChange={(e) => setItemTransferModal({ ...itemTransferModal, toTableId: e.target.value })}>
+                {itemTransferTables.map((table) => <option key={table.id} value={table.id}>{table.code} · {table.display_name} ({table.status === 'AVAILABLE' ? 'new check' : 'existing check'})</option>)}
+              </select>
+            </label>
+            <label>
+              Reason for transfer
+              <input required minLength={3} maxLength={500} value={itemTransferModal.reason} onChange={(e) => setItemTransferModal({ ...itemTransferModal, reason: e.target.value })} placeholder="e.g. Guest moved this dish to another table" />
+            </label>
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={() => setItemTransferModal(null)}>Cancel</button>
+              <button className="primary" disabled={busy || !itemTransferModal.toTableId}>{busy ? 'Moving…' : 'Confirm move'}</button>
             </div>
           </form>
         </div>

@@ -18,7 +18,6 @@ use App\Models\TaxCategory;
 use App\Models\User;
 use App\Models\Zone;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Hash;
 
 class RestaurantSetupSeeder extends Seeder
 {
@@ -59,6 +58,10 @@ class RestaurantSetupSeeder extends Seeder
         $roleMap = [
             'admin' => array_keys($permissionNames),
             'manager' => array_values(array_diff(array_keys($permissionNames), ['manage-users', 'manage-security'])),
+            'supervisor' => [
+                'view-floor', 'manage-floor', 'manage-menu', 'manage-orders',
+                'manage-kitchen', 'manage-bar', 'take-payment', 'refund-payment', 'view-reports',
+            ],
             'waiter' => ['view-floor', 'manage-orders'],
             'cashier' => ['view-floor', 'manage-orders', 'take-payment'],
             'kitchen' => ['manage-kitchen'],
@@ -68,35 +71,6 @@ class RestaurantSetupSeeder extends Seeder
             $role = Role::query()->firstOrCreate(['key' => $key], ['name' => ucfirst($key)]);
             $role->permissions()->sync(collect($permissionKeys)->map(fn ($permission) => $permissions[$permission]->id));
         });
-
-        $adminRole = Role::query()->where('key', 'admin')->first();
-        $managerRole = Role::query()->where('key', 'manager')->first();
-
-        $defaultAdmin = User::query()->firstOrCreate(
-            ['email' => 'admin@cliquecafe.com'],
-            [
-                'restaurant_id' => $restaurant->id,
-                'name' => 'Clique Cafe Admin',
-                'password' => Hash::make('Admin@12345'),
-                'active' => true,
-            ],
-        );
-        if ($adminRole) {
-            $defaultAdmin->roles()->syncWithoutDetaching([$adminRole->id]);
-        }
-
-        $localManager = User::query()->firstOrCreate(
-            ['email' => 'manager@local.test'],
-            [
-                'restaurant_id' => $restaurant->id,
-                'name' => 'Clique Cafe Manager',
-                'password' => Hash::make('Password123!'),
-                'active' => true,
-            ],
-        );
-        if ($managerRole) {
-            $localManager->roles()->syncWithoutDetaching([$managerRole->id]);
-        }
 
         User::query()
             ->where('email', 'like', 'foundation-qa-%@local.test')

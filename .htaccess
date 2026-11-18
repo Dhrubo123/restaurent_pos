@@ -5,6 +5,12 @@
 
     RewriteEngine On
 
+    # Keep application source, database exports, and backup archives private.
+    RewriteRule ^(?:backend|frontend)(?:/|$) - [F,L,NC]
+    RewriteRule ^\.git(?:/|$) - [F,L,NC]
+    RewriteRule ^\.env(?:\..*)?$ - [F,L,NC]
+    RewriteRule \.(?:sql(?:\.gz)?|zip|bak|log|sqlite|db)$ - [F,L,NC]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

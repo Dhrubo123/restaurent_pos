@@ -137,7 +137,8 @@
 .ticket-line-mods span{font-size:.72rem;color:#52483f;background:#f4efe8;padding:2px 7px;border-radius:6px}
 .ticket-line-note{margin-top:5px;font-size:.75rem;color:#b85014;font-style:italic}
 .ticket-line-total{font:800 .95rem Manrope;white-space:nowrap}
-.ticket-line-controls{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:8px;border-top:1px dashed #e6dfd5}
+.ticket-line-controls{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;padding-top:8px;border-top:1px dashed #e6dfd5}
+.ticket-line-controls .secondary.compact{min-height:30px;padding:4px 9px;font-size:.72rem}
 .line-state-badge{font-size:.66rem;font-weight:800;letter-spacing:.05em;padding:3px 7px;border-radius:6px;background:#f2ece4;color:#5e5349}
 .line-stepper{display:flex;align-items:center;gap:8px}
 .line-stepper button{width:30px;height:30px;border:1px solid var(--line);border-radius:8px;background:white;font-weight:800;color:var(--ink)}
@@ -384,8 +385,8 @@
 .kot-paper-item-name{font-size:13px;line-height:1.2}
 .kot-paper-mods{margin:1px 0 0;padding-left:14px;font-size:10px}
 .kot-paper-note{font-size:10px;font-weight:700}
-.kot-line-cancelled{text-decoration:line-through;opacity:.62}
-.kot-paper-cancel-tag{font-size:10px;font-weight:900;text-decoration:none}
+.kot-line-cancelled .kot-paper-qty,.kot-line-cancelled .kot-paper-item-name{text-decoration:line-through;opacity:.7}
+.kot-paper-cancel-tag{margin-top:2px;font-size:10px;font-weight:900;color:#9f2f26}
 .kot-paper-order-note{padding:7px 0;font-size:11px;font-weight:800}
 .kot-paper-footer{
   display:flex;
@@ -517,6 +518,13 @@
 }
 .cashier-tender-box .change-callout strong{font-size:1.2rem;font-variant-numeric:tabular-nums}
 @media(max-width:560px){.tender-amount-grid{grid-template-columns:1fr}.tender-methods{gap:5px}.tender-methods button{padding:6px 3px;font-size:11px}}
+.discount-type-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:18px 0}
+.discount-type-options button{display:grid;gap:4px;min-height:68px;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;background:#fff;text-align:left}
+.discount-type-options button.active{border-color:var(--coral);background:#fff3e9;box-shadow:0 0 0 2px #ec6b1e1c}
+.discount-type-options strong{font-size:14px;color:var(--ink)}
+.discount-type-options span{font-size:12px;color:var(--muted)}
+.discount-preview{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px 12px;margin:12px 0;padding:12px 14px;border:1px solid #d6e7dc;border-radius:11px;background:#f2f8f3;font-size:13px;color:#4a5c51}
+.discount-preview strong{font-size:15px;color:var(--green)}
 .cashier-cta-stack{
   display:grid;
   gap:8px;
@@ -688,6 +696,12 @@
   vertical-align:middle;
 }
 .reports-table tr:last-child td{border-bottom:0}
+.summary-icon.danger{background:#fdeceb;color:#9f2f26}
+.void-alert-card{border-color:#efb5af!important;background:linear-gradient(135deg,#fff 0%,#fff4f2 100%)!important}
+.link-button{display:inline;padding:0;border:0;background:transparent;color:#c04436;font:800 11px Manrope;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.void-control-panel{border:1.5px solid #efb5af;background:linear-gradient(180deg,#fff 0%,#fffafa 100%)}
+.void-kot-tag{display:inline-flex;margin:2px 4px 2px 0;padding:3px 7px;border:1px solid #e1d8cd;border-radius:999px;background:#f8f5ef;font-size:11px;font-weight:800;white-space:nowrap}
+.void-reason-chip{display:inline-block;min-width:170px;padding:7px 9px;border-left:3px solid #c04436;border-radius:5px;background:#fff1ef;color:#7d2b22;font-weight:700}
 .voided-invoice-row{opacity:.68;background:#fff8f7}
 .invoice-status-pill{
   display:inline-flex;
@@ -780,9 +794,9 @@
   height:12px;
   border-radius:4px;
 }
-.swatch-available{background:#e9f7f1;border:2px solid #2b8a66}
+.swatch-available{background:#f4f1ec;border:2px solid #9b9185}
 .swatch-open{background:#fff0e5;border:2px solid #ec6b1e}
-.swatch-bill{background:#fef4df;border:2px solid #c98f27}
+.swatch-bill{background:#eaf8f1;border:2px solid #23855f}
 .legend-chair-icon{
   display:inline-block;
   width:18px;
@@ -876,8 +890,9 @@
 }
 .status-bill_requested .chair-occupied,
 .status-partially_paid .chair-occupied{
-  background:#c2851c;
-  border-color:#7d5209;
+  background:#2b9a70;
+  border-color:#176446;
+  box-shadow:0 2px 6px rgba(43,154,112,0.3);
 }
 .dining-tabletop{
   flex:1;
@@ -887,10 +902,10 @@
   display:flex;
   flex-direction:column;
   justify-content:space-between;
-  border:2.5px solid #8ec6ad;
+  border:2.5px solid #b8afa4;
   border-radius:24px;
   background:linear-gradient(180deg,#ffffff 0%,#f9fbf9 100%);
-  box-shadow:inset 0 0 0 4px #eff6f2,0 10px 22px rgba(28,25,23,0.08);
+  box-shadow:inset 0 0 0 4px #f3f0eb,0 10px 22px rgba(28,25,23,0.08);
   cursor:pointer;
   transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;
 }
@@ -910,15 +925,32 @@
   box-shadow:inset 0 0 0 4px #fce4d2,0 10px 22px rgba(236,107,30,0.15);
 }
 .status-bill_requested .dining-tabletop{
-  border-color:#cc922b;
-  background:linear-gradient(180deg,#fffdf6 0%,#fdf3dc 100%);
-  box-shadow:inset 0 0 0 4px #f8e8c3,0 10px 22px rgba(185,134,37,0.15);
+  border-color:#23855f;
+  background:linear-gradient(180deg,#f8fffb 0%,#e5f7ee 100%);
+  box-shadow:inset 0 0 0 4px #d5f0e3,0 10px 22px rgba(35,133,95,0.18);
 }
 .status-partially_paid .dining-tabletop{
-  border-color:#cf7734;
-  background:linear-gradient(180deg,#fffaf4 0%,#fdead8 100%);
-  box-shadow:inset 0 0 0 4px #f7dec4,0 10px 22px rgba(184,104,10,0.15);
+  border-color:#23855f;
+  background:linear-gradient(180deg,#f8fffb 0%,#e5f7ee 100%);
+  box-shadow:inset 0 0 0 4px #d5f0e3,0 10px 22px rgba(35,133,95,0.18);
 }
+.floor-table-unit.status-available .status-dot{
+  background:#8f867c;
+  box-shadow:0 0 0 4px rgba(143,134,124,0.14);
+}
+.floor-table-unit.status-available .table-status strong{color:#625b53}
+.floor-table-unit.status-open .status-dot{
+  background:#ec6b1e;
+  box-shadow:0 0 0 4px rgba(236,107,30,0.18);
+}
+.floor-table-unit.status-open .table-status strong{color:#d4580f}
+.floor-table-unit.status-bill_requested .status-dot,
+.floor-table-unit.status-partially_paid .status-dot{
+  background:#23855f;
+  box-shadow:0 0 0 4px rgba(35,133,95,0.18);
+}
+.floor-table-unit.status-bill_requested .table-status strong,
+.floor-table-unit.status-partially_paid .table-status strong{color:#18704f}
 .status-inactive .dining-tabletop{
   border-color:#c6d0cc;
   background:#f1f4f2;
@@ -1042,6 +1074,10 @@
   font-weight:800;
 }
 
+/* Android browser printing uses a detached receipt clone so the full-screen modal
+   cannot add a blank Letter page to the thermal slip. */
+.thermal-print-root{display:none}
+
 @media(max-width:600px){
   .print-backdrop{padding:0;place-items:stretch}
   .kot-print-dialog{width:100%;max-height:100vh;border:0;border-radius:0}
@@ -1056,6 +1092,51 @@
 @media print{
   @page{size:80mm auto;margin:0}
   body{background:#fff!important;margin:0!important;padding:0!important}
+  html.thermal-print-active{
+    width:80mm!important;
+    min-width:0!important;
+    min-height:0!important;
+    height:auto!important;
+    overflow:visible!important;
+    background:#fff!important;
+  }
+  body.thermal-print-active{
+    width:80mm!important;
+    min-width:0!important;
+    min-height:0!important;
+    height:auto!important;
+    overflow:visible!important;
+  }
+  body.thermal-print-active>*{display:none!important}
+  body.thermal-print-active>.thermal-print-root{
+    display:block!important;
+    width:80mm!important;
+    min-height:0!important;
+    height:auto!important;
+    margin:0!important;
+    padding:0!important;
+    overflow:visible!important;
+    background:#fff!important;
+  }
+  body.thermal-print-active .thermal-print-root .kot-paper{
+    display:block!important;
+    width:76mm!important;
+    min-height:0!important;
+    height:auto!important;
+    margin:0 auto!important;
+    padding:4mm 2mm!important;
+    border:0!important;
+    box-shadow:none!important;
+    break-after:auto!important;
+    page-break-after:auto!important;
+  }
+  body.thermal-print-active .thermal-print-root .kot-paper-second-copy{
+    break-before:page!important;
+    page-break-before:always!important;
+    margin-top:0!important;
+    padding-top:4mm!important;
+    border-top:0!important;
+  }
   .no-print,.sidebar,.header-actions{display:none!important}
   .dashboard-shell{display:block!important;min-height:0!important}
   .content{padding:12px!important}

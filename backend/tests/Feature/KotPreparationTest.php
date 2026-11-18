@@ -190,6 +190,36 @@ class KotPreparationTest extends TestCase
         $this->assertSame('CANCELLED', $afterCancel['items'][0]['status']);
         $this->assertSame('120.00', $afterCancel['subtotal']);
         $this->assertSame('CANCELLED', $afterCancel['kots'][1]['status'] === 'CANCELLED' ? $afterCancel['kots'][1]['status'] : $afterCancel['kots'][0]['status']);
+
+        $cancelledKotItem = collect($this->actingAs($manager)->getJson('/api/v1/kots?include_completed=1')->assertOk()->json('data'))
+            ->flatMap(fn (array $kot) => $kot['items'])
+            ->firstWhere('order_item_id', $burgerLineId);
+        $this->assertSame('CANCELLED', $cancelledKotItem['status']);
+        $this->assertSame('Guest changed mind', $cancelledKotItem['cancel_reason']);
+        $this->assertSame($manager->name, $cancelledKotItem['cancelled_by_name']);
+
+        $date = now('Asia/Dhaka')->format('Y-m-d');
+        $supervisorReport = $this->actingAs($manager)
+            ->getJson("/api/v1/reports/summary?from={$date}&to={$date}")
+            ->assertOk()
+            ->json('data');
+        $this->assertSame([], $supervisorReport['voided_items']);
+        $this->assertCount(0, $this->actingAs($manager)
+            ->getJson('/api/v1/audit-events?action=order_item.sent_cancelled')
+            ->assertOk()
+            ->json('data'));
+
+        $adminRole = Role::query()->create(['key' => 'admin', 'name' => 'Admin']);
+        $manager->roles()->attach($adminRole);
+        $adminReport = $this->actingAs($manager)
+            ->getJson("/api/v1/reports/summary?from={$date}&to={$date}")
+            ->assertOk()
+            ->json('data');
+        $this->assertCount(1, $adminReport['voided_items']);
+        $this->assertSame('Smokehouse Burger', $adminReport['voided_items'][0]['item_name']);
+        $this->assertSame('Guest changed mind', $adminReport['voided_items'][0]['reason']);
+        $this->assertSame($manager->name, $adminReport['voided_items'][0]['voided_by']);
+        $this->assertNotEmpty($adminReport['voided_items'][0]['kots']);
     }
 
     private function kotSetup(): array

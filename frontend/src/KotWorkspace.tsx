@@ -177,7 +177,10 @@ export default function KotWorkspace({
                           )}
                           {item.note && <p className="ticket-line-note">Note: {item.note}</p>}
                           {item.status === 'CANCELLED' && (
-                            <p className="ticket-line-note">CANCELLED: {item.cancel_reason}</p>
+                            <p className="ticket-line-note">
+                              CANCELLED: {item.cancel_reason}
+                              {item.cancelled_by_name ? ` · Authorized by ${item.cancelled_by_name}` : ''}
+                            </p>
                           )}
                         </div>
                       </div>

@@ -184,6 +184,16 @@ export default function CashierWorkspace({
     (method === 'CASH' ? numTendered >= numAmount : providerRef.trim().length >= 3)
   const changePreview =
     method === 'CASH' ? Math.max(0, numTendered - Math.min(numAmount, balanceDue)) : 0
+  const discountValue = Number(discountModal?.value ?? 0)
+  const discountSubtotal = Number(selectedOrder?.subtotal ?? 0)
+  const discountValueValid = Boolean(discountModal) &&
+    discountValue > 0 &&
+    (discountModal?.type === 'PERCENTAGE' ? discountValue <= 100 : discountValue <= discountSubtotal)
+  const discountPreview = discountValueValid
+    ? Math.round((discountModal?.type === 'PERCENTAGE'
+      ? discountSubtotal * discountValue / 100
+      : discountValue) * 100) / 100
+    : 0
 
   const handleSplitPayment = async (event: FormEvent) => {
     event.preventDefault()
@@ -559,9 +569,7 @@ export default function CashierWorkspace({
                         type="button"
                         className="inline-link-btn"
                         disabled={busy}
-                        onClick={() =>
-                          setDiscountModal({ type: 'PERCENTAGE', value: '5', reason: '' })
-                        }
+                        onClick={() => setDiscountModal({ type: 'PERCENTAGE', value: '', reason: '' })}
                       >
                         (＋ Add discount)
                       </button>
@@ -988,33 +996,43 @@ export default function CashierWorkspace({
                 ×
               </button>
             </div>
-            <div className="field-row">
-              <label>
-                Discount type
-                <select
-                  value={discountModal.type}
-                  onChange={(e) =>
-                    setDiscountModal({
-                      ...discountModal,
-                      type: e.target.value as 'PERCENTAGE' | 'FIXED',
-                    })
-                  }
-                >
-                  <option value="PERCENTAGE">Percentage (%)</option>
-                  <option value="FIXED">Fixed Amount (৳)</option>
-                </select>
-              </label>
-              <label>
-                {discountModal.type === 'PERCENTAGE' ? 'Percentage (%)' : 'Amount (৳)'}
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  required
-                  value={discountModal.value}
-                  onChange={(e) => setDiscountModal({ ...discountModal, value: e.target.value })}
-                />
-              </label>
+            <div className="discount-type-options" role="group" aria-label="Discount type">
+              <button
+                type="button"
+                className={discountModal.type === 'PERCENTAGE' ? 'active' : ''}
+                aria-pressed={discountModal.type === 'PERCENTAGE'}
+                onClick={() => setDiscountModal({ ...discountModal, type: 'PERCENTAGE', value: '' })}
+              >
+                <strong>Percentage</strong>
+                <span>e.g. 10% off</span>
+              </button>
+              <button
+                type="button"
+                className={discountModal.type === 'FIXED' ? 'active' : ''}
+                aria-pressed={discountModal.type === 'FIXED'}
+                onClick={() => setDiscountModal({ ...discountModal, type: 'FIXED', value: '' })}
+              >
+                <strong>Fixed amount</strong>
+                <span>e.g. ৳100 off</span>
+              </button>
+            </div>
+            <label>
+              {discountModal.type === 'PERCENTAGE' ? 'Enter percentage (%)' : 'Enter discount amount (৳)'}
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0.01"
+                max={discountModal.type === 'PERCENTAGE' ? 100 : discountSubtotal}
+                placeholder={discountModal.type === 'PERCENTAGE' ? 'e.g. 10' : 'e.g. 100'}
+                required
+                value={discountModal.value}
+                onChange={(e) => setDiscountModal({ ...discountModal, value: e.target.value })}
+              />
+            </label>
+            <div className="discount-preview" aria-live="polite">
+              <span>Items subtotal ৳{discountSubtotal.toFixed(2)}</span>
+              <strong>Discount −৳{discountPreview.toFixed(2)}</strong>
             </div>
             <label>
               Reason for discount (mandatory; &gt;5% requires Manager role)
@@ -1030,7 +1048,7 @@ export default function CashierWorkspace({
               <button type="button" className="secondary" onClick={() => setDiscountModal(null)}>
                 Cancel
               </button>
-              <button className="primary" disabled={busy}>
+              <button className="primary" disabled={busy || !discountValueValid || discountModal.reason.trim().length < 3}>
                 {busy ? 'Applying…' : 'Apply discount'}
               </button>
             </div>

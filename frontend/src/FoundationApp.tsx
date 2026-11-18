@@ -19,6 +19,8 @@ import InventoryWorkspace from './InventoryWorkspace.tsx'
 import type { InventoryData } from './InventoryWorkspace.tsx'
 import StaffWorkspace from './StaffWorkspace.tsx'
 import type { StaffRecord, StaffRoleOption } from './StaffWorkspace.tsx'
+import OwnerWorkspace from './OwnerWorkspace.tsx'
+import type { OwnerSummaryData } from './OwnerWorkspace.tsx'
 
 type User = {
   name: string
@@ -95,7 +97,7 @@ const emptyTable: TableDraft = { zone_id: '', code: '', display_name: '', capaci
 export default function FoundationApp() {
   const [user, setUser] = useState<User | null>(null)
   const [activeTab, setActiveTab] = useState<
-    'floor' | 'orders' | 'menu' | 'kitchen' | 'cashier' | 'reports' | 'inventory' | 'staff'
+    'floor' | 'orders' | 'menu' | 'kitchen' | 'cashier' | 'owner' | 'reports' | 'inventory' | 'staff'
   >('floor')
   const [kots, setKots] = useState<KotRecord[]>([])
   const [kotStations, setKotStations] = useState<string[]>([])
@@ -115,6 +117,7 @@ export default function FoundationApp() {
   const [inventoryData, setInventoryData] = useState<InventoryData | null>(null)
   const [staffList, setStaffList] = useState<StaffRecord[]>([])
   const [staffRoleOptions, setStaffRoleOptions] = useState<StaffRoleOption[]>([])
+  const [ownerData, setOwnerData] = useState<OwnerSummaryData | null>(null)
   const [menuCategories, setMenuCategories] = useState<MenuCategoryRecord[]>([])
   const [taxCategories, setTaxCategories] = useState<TaxCategory[]>([])
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([])
@@ -149,6 +152,7 @@ export default function FoundationApp() {
       )
     : false
   const canCancelSentItems = canManageFloor || canManageMenu
+  const isOwnerAdmin = (user?.roles.includes('admin') ?? false) || (user?.permissions.includes('manage-security') ?? false)
 
   const refreshCsrf = async () => {
     const result = await request<{ token: string }>('/csrf-token')
@@ -233,6 +237,68 @@ export default function FoundationApp() {
     setStaffRoleOptions(result.meta.roles)
   }
 
+  const loadOwnerMeals = async () => {
+    const result = await request<{ data: OwnerSummaryData }>('/owner-meals')
+    setOwnerData(result.data)
+  }
+
+  const updateOwnerBudget = async (monthlyBudget: number): Promise<boolean> => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ data: OwnerSummaryData }>('/owner-meals/budget', csrfToken, {
+        method: 'POST',
+        body: JSON.stringify({ monthly_budget: monthlyBudget }),
+      })
+      setOwnerData(result.data)
+      setSuccess('Owner monthly food budget updated.')
+      return true
+    } catch (caught) {
+      handleFailure(caught)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitOwnerMeal = async (payload: {
+    guest_count: number
+    note?: string
+    items: {
+      menu_item_id: number
+      item_variant_id?: number | null
+      quantity: number
+      modifier_option_ids?: number[]
+      note?: string
+    }[]
+  }): Promise<boolean> => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const result = await request<{ kots: KotRecord[]; summary: OwnerSummaryData }>('/owner-meals', csrfToken, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      setOwnerData(result.summary)
+      if (result.kots && result.kots.length > 0) {
+        setPrintKots(result.kots)
+      }
+      if (canManageInventory) {
+        void loadInventory()
+      }
+      if (canViewKots) {
+        void loadKots()
+      }
+      setSuccess('Owner meal placed! KOT released to Kitchen/Bar & Inventory deducted (৳0 added to Sales Report).')
+      return true
+    } catch (caught) {
+      handleFailure(caught)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const bootstrapUser = async (currentUser: User) => {
     const hasFloor = currentUser.permissions.includes('view-floor')
     const manageFloor = currentUser.permissions.includes('manage-floor')
@@ -248,6 +314,7 @@ export default function FoundationApp() {
     if (takePayment) tasks.push(loadBillingData())
     if (viewReports) tasks.push(loadReports(), loadAuditEvents())
     if (manageMenu || manageFloor) tasks.push(loadInventory())
+    if (manageOrders || manageFloor || manageMenu) tasks.push(loadOwnerMeals())
     if (manageUsers || manageFloor || manageMenu) tasks.push(loadStaff())
 
     const hasKots = ['manage-orders', 'manage-kitchen', 'manage-bar', 'manage-floor', 'manage-menu', 'view-floor'].some(
@@ -395,6 +462,8 @@ export default function FoundationApp() {
       })
       setPassword('')
       setCsrfToken(result.token)
+      setReportData(null)
+      setAuditEvents([])
       setUser(result.data)
       await bootstrapUser(result.data)
     } catch (caught) {
@@ -414,6 +483,13 @@ export default function FoundationApp() {
       setOrders([])
       setSelectedOrder(null)
       setMenuCategories([])
+      setReportData(null)
+      setAuditEvents([])
+      setRecentInvoices([])
+      setOwnerInvoices([])
+      setInventoryData(null)
+      setStaffList([])
+      localStorage.removeItem('clique_pos_offline_cache_v1')
       setEmail('')
       setPassword('')
       setActiveTab('floor')
@@ -648,7 +724,7 @@ export default function FoundationApp() {
     resetMessages()
     setBusy(true)
     try {
-      const result = await request<{ data: OrderRecord }>(
+      const result = await request<{ data: OrderRecord; void_kots?: KotRecord[] }>(
         `/orders/${order.id}/items/${item.id}/cancel`,
         csrfToken,
         {
@@ -657,8 +733,16 @@ export default function FoundationApp() {
         },
       )
       setSelectedOrder(result.data)
-      setSuccess(`${item.item_name} was cancelled.`)
-      await Promise.all([loadFloor(), loadOrders(result.data.id)])
+      if (result.void_kots && result.void_kots.length > 0) {
+        setPrintKots(result.void_kots)
+      }
+      setSuccess(`${item.item_name} was voided and logged in the Owner & Admin Void Ledger.`)
+      await Promise.all([
+        loadFloor(),
+        loadOrders(result.data.id),
+        canViewKots ? loadKots() : Promise.resolve(),
+        isOwnerAdmin ? loadOwnerMeals() : Promise.resolve(),
+      ])
       return true
     } catch (caught) {
       handleFailure(caught)
@@ -690,6 +774,7 @@ export default function FoundationApp() {
         loadKots(),
         loadMenu(canManageMenu),
         canManageInventory ? loadInventory() : Promise.resolve(),
+        isOwnerAdmin ? loadOwnerMeals() : Promise.resolve(),
       ])
     } catch (caught) {
       handleFailure(caught)
@@ -819,6 +904,25 @@ export default function FoundationApp() {
       setSelectedOrder(result.data)
       setSuccess(`Transferred ${result.data.order_number} to ${result.data.table?.display_name}.`)
       await Promise.all([loadFloor(), loadOrders(result.data.id)])
+      return true
+    } catch (caught) {
+      handleFailure(caught)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const transferOrderItem = async (order: OrderRecord, item: OrderItemRecord, toTableId: number, reason: string): Promise<boolean> => {
+    resetMessages()
+    setBusy(true)
+    try {
+      await request<{ data: OrderRecord }>(`/orders/${order.id}/items/${item.id}/transfer`, csrfToken, {
+        method: 'POST',
+        body: JSON.stringify({ version: order.version, to_dining_table_id: toTableId, reason }),
+      })
+      setSuccess(`${item.item_name} moved to the other table's bill.`)
+      await Promise.all([loadFloor(), loadOrders(order.id)])
       return true
     } catch (caught) {
       handleFailure(caught)
@@ -1613,7 +1717,7 @@ export default function FoundationApp() {
       <p className="brand-copy">Crafted for Clique Café — fast table service, espresso & kitchen routing, and seamless cashier checkout.</p>
       <div className="service-pills"><span>Coffee</span><span>Bistro</span><span>Desserts</span></div>
     </section>
-    <section className="login-panel"><form className="login-card" onSubmit={login}><p className="eyebrow coral">CLIQUE CAFÉ · POS</p><h2>Sign in to your shift</h2><p className="muted">Use the local account created during setup.</p>{error && <Alert message={error} />}{success && <Success message={success} />}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required /><FieldError errors={fieldErrors.email} /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /><FieldError errors={fieldErrors.password} /></label><button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button><p className="demo-note">Clique Café POS · Developed by Tech Base</p></form></section>
+    <section className="login-panel"><form className="login-card" onSubmit={login}><p className="eyebrow coral">CLIQUE CAFÉ · POS</p><h2>Sign in to your shift</h2><p className="muted">Use your Owner/Admin or Staff account credentials.</p>{error && <Alert message={error} />}{success && <Success message={success} />}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required /><FieldError errors={fieldErrors.email} /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /><FieldError errors={fieldErrors.password} /></label><button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button><p className="demo-note">Clique Café POS · Developed by Tech Base</p></form></section>
   </main>
 
   return <div className="dashboard-shell">
@@ -1637,6 +1741,9 @@ export default function FoundationApp() {
         </button>
         <button className={activeTab === 'cashier' ? 'active' : ''} disabled={!canTakePayment} onClick={() => { resetMessages(); setActiveTab('cashier'); void Promise.all([loadOrders(), loadBillingData()]) }}>
           <span>৳</span> Cashier {orders.filter((o) => o.status === 'BILL_REQUESTED' || o.status === 'PARTIALLY_PAID').length > 0 && `(${orders.filter((o) => o.status === 'BILL_REQUESTED' || o.status === 'PARTIALLY_PAID').length})`}
+        </button>
+        <button className={activeTab === 'owner' ? 'active' : ''} disabled={!(canManageOrders || canManageFloor || canManageMenu)} onClick={() => { resetMessages(); setActiveTab('owner'); void loadOwnerMeals() }}>
+          <span>👑</span> Owner {isOwnerAdmin && ownerData?.voided_alerts && ownerData.voided_alerts.length > 0 ? `(${ownerData.voided_alerts.length})` : ''}
         </button>
         <button className={activeTab === 'menu' ? 'active' : ''} onClick={() => { resetMessages(); setActiveTab('menu') }}>
           <span>◫</span> Menu
@@ -1691,7 +1798,20 @@ export default function FoundationApp() {
       {error && <Alert message={error} dismiss={() => setError('')} />}
       {success && <Success message={success} dismiss={() => setSuccess('')} />}
 
-      {activeTab === 'staff' ? (
+      {activeTab === 'owner' ? (
+        <OwnerWorkspace
+          restaurantName={user.restaurant.name}
+          ownerData={ownerData}
+          menuCategories={menuCategories}
+          canManageBudget={canManageFloor || canManageMenu}
+          isOwnerAdmin={isOwnerAdmin}
+          busy={busy}
+          onRefresh={loadOwnerMeals}
+          onUpdateBudget={updateOwnerBudget}
+          onSubmitOwnerMeal={submitOwnerMeal}
+          onPrintKots={(kotsToPrint) => setPrintKots(kotsToPrint)}
+        />
+      ) : activeTab === 'staff' ? (
         <StaffWorkspace
           restaurantName={user.restaurant.name}
           staffList={staffList}
@@ -1722,6 +1842,7 @@ export default function FoundationApp() {
           report={reportData}
           auditEvents={auditEvents}
           canRefundOrVoid={canRefundOrVoid}
+          canViewAllReportDates={user.roles.includes('admin')}
           busy={busy}
           onLoadReport={loadReports}
           onLoadAudit={loadAuditEvents}
@@ -1826,6 +1947,7 @@ export default function FoundationApp() {
             onViewOrderKot={viewOrderKot}
             onRequestBill={requestOrderBill}
             onTransferOrder={transferOrder}
+            onTransferItem={transferOrderItem}
             onMergeOrder={mergeOrder}
             onCancelOrder={cancelOrder}
             onOpenCashier={canTakePayment ? () => { resetMessages(); setActiveTab('cashier'); void loadBillingData() } : undefined}
@@ -1836,14 +1958,14 @@ export default function FoundationApp() {
       ) : (
         <>
           <header><div><p className="eyebrow coral">FLOOR & TABLES</p><h1>Good service starts here.</h1><p className="muted">{user.restaurant.name} · Interactive dining room floor plan</p></div><div className="header-actions"><span className="live"><i /> Live Floor</span>{canManageOrders && <><button className="secondary compact" disabled={busy} onClick={() => setShowTableGroup(true)}>⇄ Merge tables</button><button className="secondary compact" disabled={busy} onClick={() => void openTakeawayOrder()}>🛍 + Takeaway / Parcel</button></>}{canManageFloor && <><button className="secondary compact" onClick={() => setShowZones(true)}>Manage zones</button><button className="primary compact" onClick={() => setTableDraft({ ...emptyTable, zone_id: String(zones.find((zone) => zone.active)?.id ?? '') })}>＋ Add table</button></>}</div></header>
-          <section className="summary-grid"><Summary icon="✓" tone="green" value={tables.filter((table) => table.active && table.status === 'AVAILABLE').length} label="Available" /><Summary icon="●" tone="blue" value={tables.filter((table) => table.status === 'OPEN').length} label="Occupied" /><Summary icon="◷" tone="amber" value={tables.filter((table) => table.status === 'BILL_REQUESTED' || table.status === 'PARTIALLY_PAID').length} label="Bill / Payment" /><Summary icon="#" tone="ink" value={tables.length} label="Total tables" /></section>
+          <section className="summary-grid"><Summary icon="○" tone="ink" value={tables.filter((table) => table.active && table.status === 'AVAILABLE').length} label="Available" /><Summary icon="●" tone="amber" value={tables.filter((table) => table.status === 'OPEN').length} label="Active Order" /><Summary icon="✓" tone="green" value={tables.filter((table) => table.status === 'BILL_REQUESTED' || table.status === 'PARTIALLY_PAID').length} label="Bill / Payment" /><Summary icon="#" tone="ink" value={tables.length} label="Total tables" /></section>
           {zones.length === 0 ? <EmptyState title="No zones yet" copy="Add Indoor, Outdoor, or another service zone to begin." action={canManageFloor ? () => setShowZones(true) : undefined} /> : <>
             <div className="floor-plan-bar">
               <div className="zone-tabs" style={{ marginBottom: 0 }}><button className={selectedZone === 'all' ? 'active' : ''} onClick={() => setSelectedZone('all')}>All tables</button>{zones.map((zone) => <button key={zone.id} className={selectedZone === zone.id ? 'active' : ''} onClick={() => setSelectedZone(zone.id)}>{zone.name}{!zone.active && ' · Inactive'}<span>{zone.tables.length}</span></button>)}</div>
               <div className="floor-legend">
-                <span><i className="legend-swatch swatch-available" /> Available</span>
-                <span><i className="legend-swatch swatch-open" /> Occupied</span>
-                <span><i className="legend-swatch swatch-bill" /> Bill Requested</span>
+                <span><i className="legend-swatch swatch-available" /> Available / Free</span>
+                <span><i className="legend-swatch swatch-open" /> Active Order / KOT</span>
+                <span><i className="legend-swatch swatch-bill" /> Bill Requested / Payment</span>
                 <span><i className="legend-chair-icon" /> Filled Chair = Seated Guest</span>
               </div>
             </div>

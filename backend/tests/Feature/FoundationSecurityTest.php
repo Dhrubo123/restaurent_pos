@@ -11,6 +11,13 @@ class FoundationSecurityTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_seeding_creates_no_default_login_accounts(): void
+    {
+        $this->seed(RestaurantSetupSeeder::class);
+
+        $this->assertDatabaseCount('users', 0);
+    }
+
     public function test_admin_and_manager_have_explicitly_different_permissions(): void
     {
         $this->seed(RestaurantSetupSeeder::class);

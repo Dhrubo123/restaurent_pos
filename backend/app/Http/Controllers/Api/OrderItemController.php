@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\DiningTable;
 use App\Models\ItemVariant;
 use App\Models\MenuItem;
 use App\Models\ModifierOption;
@@ -10,6 +11,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderItemModifier;
 use App\Support\Audit;
+use App\Support\KotPresenter;
 use App\Support\OrderTotals;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -186,6 +188,9 @@ class OrderItemController extends Controller
                     'table.zone:id,name',
                     'waiter:id,name',
                     'items' => fn ($q) => $q->with('modifiers')->orderBy('id'),
+                    'kots' => fn ($q) => $q->with(['round:id,round_number,sent_by,sent_at', 'items'])->latest('sent_at'),
+                    'discounts',
+                    'payments' => fn ($q) => $q->with('receiver:id,name')->orderBy('id'),
                     'transfers' => fn ($q) => $q->with(['fromTable:id,code,display_name', 'toTable:id,code,display_name', 'actor:id,name'])->latest('transferred_at'),
                 ]),
             ], 201);
@@ -246,6 +251,9 @@ class OrderItemController extends Controller
                     'table.zone:id,name',
                     'waiter:id,name',
                     'items' => fn ($q) => $q->with('modifiers')->orderBy('id'),
+                    'kots' => fn ($q) => $q->with(['round:id,round_number,sent_by,sent_at', 'items'])->latest('sent_at'),
+                    'discounts',
+                    'payments' => fn ($q) => $q->with('receiver:id,name')->orderBy('id'),
                     'transfers' => fn ($q) => $q->with(['fromTable:id,code,display_name', 'toTable:id,code,display_name', 'actor:id,name'])->latest('transferred_at'),
                 ]),
             ]);
@@ -336,6 +344,7 @@ class OrderItemController extends Controller
             ]);
 
             $kotItems = $lockedItem->kotItems()->with('kot')->get();
+            $affectedKotIds = [];
             foreach ($kotItems as $kotItem) {
                 $kotItem->update([
                     'cancelled_quantity' => $kotItem->quantity,
@@ -346,6 +355,7 @@ class OrderItemController extends Controller
                 ]);
 
                 if ($kotItem->kot) {
+                    $affectedKotIds[] = $kotItem->kot->id;
                     $hasActiveOnKot = $kotItem->kot->items()->where('status', '!=', 'CANCELLED')->exists();
                     if (! $hasActiveOnKot) {
                         $kotItem->kot->update(['status' => 'CANCELLED']);
@@ -365,15 +375,122 @@ class OrderItemController extends Controller
                 $reason,
             );
 
+            $voidKots = $lockedOrder->kots()
+                ->whereIn('id', array_unique($affectedKotIds))
+                ->with([
+                    'order.table.zone:id,name',
+                    'order.waiter:id,name',
+                    'order.restaurant:id,name',
+                    'round.sender:id,name',
+                    'items',
+                ])
+                ->get()
+                ->map(fn ($k) => KotPresenter::toArray($k))
+                ->values()
+                ->all();
+
             return response()->json([
                 'data' => $lockedOrder->fresh()->load([
                     'table.zone:id,name',
                     'waiter:id,name',
                     'items' => fn ($q) => $q->with('modifiers')->orderBy('id'),
                     'kots' => fn ($q) => $q->with(['round:id,round_number,sent_by,sent_at', 'items'])->latest('sent_at'),
+                    'discounts',
+                    'payments' => fn ($q) => $q->with('receiver:id,name')->orderBy('id'),
                     'transfers' => fn ($q) => $q->with(['fromTable:id,code,display_name', 'toTable:id,code,display_name', 'actor:id,name'])->latest('transferred_at'),
                 ]),
+                'void_kots' => $voidKots,
             ]);
+        });
+    }
+
+    public function transfer(Request $request, Order $order, OrderItem $orderItem): JsonResponse
+    {
+        Gate::authorize('manage-orders');
+        $this->assertRestaurant($request, $order);
+        abort_unless($orderItem->order_id === $order->id, 404);
+
+        $validated = $request->validate([
+            'version' => ['required', 'integer', 'min:1'],
+            'to_dining_table_id' => ['required', 'integer'],
+            'reason' => ['required', 'string', 'min:3', 'max:500'],
+        ]);
+
+        return DB::transaction(function () use ($request, $order, $orderItem, $validated) {
+            $source = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
+            $this->assertEditableOrder($source, (int) $validated['version']);
+            abort_if((float) $source->paid_amount > 0 || $source->payments()->where('status', 'CAPTURED')->exists(), 409, 'Items cannot be moved after payment has been recorded.');
+            abort_if($source->discounts()->exists() || (float) $source->discount_amount > 0 || (float) $source->service_charge > 0, 409, 'Remove the order discount or service charge before moving an item.');
+
+            $item = OrderItem::query()->whereKey($orderItem->id)->lockForUpdate()->firstOrFail();
+            abort_unless($item->order_id === $source->id, 404);
+            abort_if($item->status === 'CANCELLED' || (float) $item->cancelled_quantity > 0, 409, 'Cancelled items cannot be moved.');
+            abort_if($item->status === 'SERVED' || (float) $item->served_quantity > 0, 409, 'Served items cannot be moved to another table.');
+
+            $table = DiningTable::query()
+                ->where('restaurant_id', $source->restaurant_id)
+                ->whereKey($validated['to_dining_table_id'])
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_if(! $table->active, 409, 'Cannot move an item to an inactive table.');
+
+            $openOrders = Order::query()
+                ->where('restaurant_id', $source->restaurant_id)
+                ->whereIn('status', Order::OPEN_STATUSES)
+                ->lockForUpdate()
+                ->get();
+            $target = $openOrders->first(fn (Order $candidate) => in_array($table->id, $candidate->merged_dining_table_ids ?? [$candidate->dining_table_id], true));
+            abort_if($target?->id === $source->id, 409, 'Choose a different table.');
+
+            if ($target) {
+                abort_if((float) $target->paid_amount > 0 || $target->payments()->where('status', 'CAPTURED')->exists(), 409, 'Items cannot be moved to an order with a recorded payment.');
+                abort_if($target->discounts()->exists() || (float) $target->discount_amount > 0 || (float) $target->service_charge > 0, 409, 'Remove the destination order discount or service charge before moving an item.');
+            } else {
+                $nextNumber = Order::query()->where('restaurant_id', $source->restaurant_id)->count() + 1;
+                do {
+                    $orderNumber = sprintf('ORD-%04d', $nextNumber++);
+                } while (Order::query()->where('restaurant_id', $source->restaurant_id)->where('order_number', $orderNumber)->exists());
+
+                $target = Order::query()->create([
+                    'restaurant_id' => $source->restaurant_id,
+                    'dining_table_id' => $table->id,
+                    'merged_dining_table_ids' => [$table->id],
+                    'order_number' => $orderNumber,
+                    'status' => 'OPEN',
+                    'waiter_id' => $request->user()->id,
+                    'guest_count' => 1,
+                    'version' => 1,
+                    'subtotal' => 0,
+                    'discount_amount' => 0,
+                    'service_charge' => 0,
+                    'tax_amount' => 0,
+                    'total' => 0,
+                    'paid_amount' => 0,
+                    'balance_due' => 0,
+                    'opened_at' => now(),
+                ]);
+            }
+
+            $fromTableId = $source->dining_table_id;
+            $item->update(['order_id' => $target->id, 'version' => $item->version + 1]);
+            $source->update(['version' => $source->version + 1]);
+            $target->update([
+                'status' => $target->status === 'BILL_REQUESTED' ? 'OPEN' : $target->status,
+                'version' => $target->version + 1,
+            ]);
+            OrderTotals::recalculateOrder($source);
+            OrderTotals::recalculateOrder($target);
+
+            Audit::record(
+                $request,
+                'order_item.transferred',
+                $item,
+                ['order_id' => $source->id, 'dining_table_id' => $fromTableId],
+                ['order_id' => $target->id, 'dining_table_id' => $table->id, 'quantity' => $item->quantity],
+                trim($validated['reason']),
+            );
+
+            return response()->json(['data' => $source->fresh()->load(['table.zone:id,name', 'waiter:id,name', 'items.modifiers'])]);
         });
     }
 

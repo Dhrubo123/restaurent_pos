@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\AuditEvent;
 use App\Models\DiningTable;
 use App\Models\MenuCategory;
 use App\Models\MenuItem;
@@ -10,12 +11,193 @@ use App\Models\Restaurant;
 use App\Models\Role;
 use App\Models\User;
 use App\Models\Zone;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class ReportsAndRefundsTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_supervisor_sees_only_the_most_recent_seven_days_while_admin_can_view_a_month(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-18 12:00:00', 'Asia/Dhaka'));
+        [, , $manager, $table] = $this->setupFixtures();
+        $supervisorRole = Role::query()->where('key', 'supervisor')->firstOrFail();
+        $supervisorRole->permissions()->sync($manager->roles()->firstOrFail()->permissions()->pluck('permissions.id'));
+        $supervisor = User::factory()->create(['restaurant_id' => $table->restaurant_id, 'active' => true]);
+        $supervisor->roles()->attach($supervisorRole);
+        $this->assertTrue($supervisor->can('view-reports'));
+        $this->assertFalse($supervisor->can('manage-users'));
+
+        $this->actingAs($supervisor)->getJson('/api/v1/reports/summary?from=2026-11-12&to=2026-11-18')
+            ->assertOk()->assertJsonPath('data.range.from', '2026-11-12');
+        $this->actingAs($supervisor)->getJson('/api/v1/reports/summary?from=2026-11-18&to=2026-11-18')->assertOk();
+        $this->actingAs($supervisor)->getJson('/api/v1/reports/summary?from=2026-11-01&to=2026-11-18')->assertForbidden();
+        $this->actingAs($supervisor)->getJson('/api/v1/reports/summary?from=2026-11-11&to=2026-11-11')->assertForbidden();
+        $this->actingAs($supervisor)->getJson('/api/v1/reports/summary?from=2026-11-18&to=2026-11-19')->assertForbidden();
+        $this->actingAs($supervisor)->getJson('/api/v1/reports/export?from=2026-11-01&to=2026-11-18')->assertForbidden();
+        $this->actingAs($manager)->getJson('/api/v1/reports/summary?from=2026-11-01&to=2026-11-18')->assertForbidden();
+
+        AuditEvent::query()->create([
+            'restaurant_id' => $table->restaurant_id,
+            'action' => 'invoice.issued',
+            'auditable_type' => 'Invoice',
+            'auditable_id' => 1,
+            'created_at' => Carbon::parse('2026-11-01 12:00:00', 'Asia/Dhaka')->utc(),
+        ]);
+        $this->assertCount(0, $this->actingAs($supervisor)->getJson('/api/v1/audit-events')->assertOk()->json('data'));
+
+        $adminRole = Role::query()->firstOrCreate(['key' => 'admin'], ['name' => 'Admin']);
+        $manager->roles()->attach($adminRole);
+        $this->actingAs($manager)->getJson('/api/v1/reports/summary?from=2026-11-01&to=2026-11-18')->assertOk();
+        $this->actingAs($manager)->get('/api/v1/reports/export?from=2026-11-01&to=2026-11-18')->assertOk();
+        $this->assertCount(1, $this->actingAs($manager)->getJson('/api/v1/audit-events')->assertOk()->json('data'));
+    }
+
+    public function test_report_uses_dhaka_day_for_late_evening_utc_sales(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-16 19:30:00', 'UTC'));
+        [$waiter, $cashier, $manager, $table, $steak] = $this->setupFixtures();
+        $this->actingAs($cashier)->postJson('/api/v1/shifts/open', [
+            'opening_float' => 0,
+        ])->assertCreated();
+        $order = $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 1])
+            ->assertCreated()->json('data');
+        $order = $this->actingAs($waiter)->postJson("/api/v1/orders/{$order['id']}/items", [
+            'version' => $order['version'],
+            'menu_item_id' => $steak->id,
+            'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $this->actingAs($cashier)->withHeader('Idempotency-Key', 'report-dhaka-checkout')
+            ->postJson("/api/v1/orders/{$order['id']}/checkout", [
+                'version' => $order['version'],
+                'method' => 'CASH',
+                'amount' => 1000,
+            ])->assertCreated();
+
+        $dhakaDay = $this->actingAs($manager)
+            ->getJson('/api/v1/reports/summary?from=2026-11-17&to=2026-11-17')
+            ->assertOk()->json('data');
+        $previousDay = $this->actingAs($manager)
+            ->getJson('/api/v1/reports/summary?from=2026-11-16&to=2026-11-16')
+            ->assertOk()->json('data');
+
+        $this->assertSame('2026-11-17', $dhakaDay['daily_breakdown'][0]['date']);
+        $this->assertSame('1000.00', $dhakaDay['kpis']['billed_total']);
+        $this->assertSame('1000.00', $dhakaDay['kpis']['collected_total']);
+        $this->assertSame('0.00', $previousDay['kpis']['billed_total']);
+        $this->assertSame('0.00', $previousDay['kpis']['collected_total']);
+    }
+
+    public function test_report_separates_billed_sales_collections_owner_due_and_payment_methods(): void
+    {
+        [$waiter, $cashier, $manager, $table, $steak] = $this->setupFixtures();
+        $this->actingAs($cashier)->postJson('/api/v1/shifts/open', [
+            'opening_float' => 100,
+        ])->assertCreated();
+
+        $ownerOrder = $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 1])
+            ->assertCreated()->json('data');
+        $ownerOrder = $this->actingAs($waiter)->postJson("/api/v1/orders/{$ownerOrder['id']}/items", [
+            'version' => $ownerOrder['version'],
+            'menu_item_id' => $steak->id,
+            'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $ownerInvoiceId = $this->actingAs($manager)->withHeader('Idempotency-Key', 'report-owner-charge')
+            ->postJson("/api/v1/orders/{$ownerOrder['id']}/checkout", [
+                'version' => $ownerOrder['version'],
+                'charge_to_owner' => true,
+            ])->assertCreated()->json('invoice.id');
+        $this->actingAs($cashier)->withHeader('Idempotency-Key', 'report-owner-payment')
+            ->postJson("/api/v1/owner-account/invoices/{$ownerInvoiceId}/payments", [
+                'method' => 'CASH',
+                'amount' => 400,
+            ])->assertCreated();
+
+        $guestOrder = $this->actingAs($waiter)
+            ->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 1])
+            ->assertCreated()->json('data');
+        $guestOrder = $this->actingAs($waiter)->postJson("/api/v1/orders/{$guestOrder['id']}/items", [
+            'version' => $guestOrder['version'],
+            'menu_item_id' => $steak->id,
+            'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $this->actingAs($cashier)->withHeader('Idempotency-Key', 'report-guest-checkout')
+            ->postJson("/api/v1/orders/{$guestOrder['id']}/checkout", [
+                'version' => $guestOrder['version'],
+                'method' => 'CARD',
+                'amount' => 1000,
+                'provider_reference' => 'CARD-REPORT-1',
+            ])->assertCreated();
+        $report = $this->actingAs($manager)->getJson('/api/v1/reports/summary')
+            ->assertOk()->json('data');
+
+        $this->assertSame('2000.00', $report['kpis']['billed_total']);
+        $this->assertSame('1400.00', $report['kpis']['collected_total']);
+        $this->assertSame('600.00', $report['kpis']['owner_due_total']);
+        $this->assertSame('400.00', $report['payments_by_method']['CASH']['net']);
+        $this->assertSame('1000.00', $report['payments_by_method']['CARD']['net']);
+    }
+
+    public function test_kitchen_and_bar_sales_are_reported_separately_from_one_discounted_invoice(): void
+    {
+        [$waiter, $cashier, $manager, $table, $steak] = $this->setupFixtures();
+        $barCategory = MenuCategory::query()->create([
+            'restaurant_id' => $table->restaurant_id,
+            'name' => 'Drinks',
+            'default_station' => 'BAR',
+            'active' => true,
+        ]);
+        $drink = MenuItem::query()->create([
+            'restaurant_id' => $table->restaurant_id,
+            'menu_category_id' => $barCategory->id,
+            'sku' => 'DRK-200',
+            'name' => 'Iced Coffee',
+            'station' => 'BAR',
+            'price' => 200,
+            'available' => true,
+            'active' => true,
+        ]);
+        $this->actingAs($cashier)->postJson('/api/v1/shifts/open', ['opening_float' => 0])->assertCreated();
+        $order = $this->actingAs($waiter)->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $order = $this->actingAs($waiter)->postJson("/api/v1/orders/{$order['id']}/items", [
+            'version' => $order['version'], 'menu_item_id' => $steak->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $order = $this->actingAs($waiter)->postJson("/api/v1/orders/{$order['id']}/items", [
+            'version' => $order['version'], 'menu_item_id' => $drink->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $order = $this->actingAs($manager)->postJson("/api/v1/orders/{$order['id']}/discounts", [
+            'version' => $order['version'], 'type' => 'PERCENTAGE', 'value' => 10,
+            'reason' => 'Regular guest discount',
+        ])->assertOk()->json('data');
+        $checkout = $this->actingAs($cashier)->withHeader('Idempotency-Key', 'mixed-station-sale')
+            ->postJson("/api/v1/orders/{$order['id']}/checkout", [
+                'version' => $order['version'], 'method' => 'CASH', 'amount' => 1080,
+            ])->assertCreated()->json();
+
+        $this->assertSame('KITCHEN', $checkout['invoice']['items'][0]['station']);
+        $this->assertSame('BAR', $checkout['invoice']['items'][1]['station']);
+
+        $report = $this->actingAs($manager)->getJson('/api/v1/reports/summary')->assertOk()->json('data');
+        $this->assertSame('1080.00', $report['kpis']['billed_total']);
+        $this->assertSame('900.00', $report['station_sales']['KITCHEN']['billed_total']);
+        $this->assertSame('180.00', $report['station_sales']['BAR']['billed_total']);
+        $this->assertSame('0.00', $report['station_sales']['UNASSIGNED']['billed_total']);
+        $this->assertSame('Ribeye Steak', $report['station_sales']['KITCHEN']['items'][0]['item_name']);
+        $this->assertSame('Iced Coffee', $report['station_sales']['BAR']['items'][0]['item_name']);
+        $this->assertSame('900.00', $report['station_sales']['KITCHEN']['daily_breakdown'][0]['billed_total']);
+        $this->assertSame('180.00', $report['station_sales']['BAR']['daily_breakdown'][0]['billed_total']);
+
+        $this->actingAs($manager)->postJson("/api/v1/invoices/{$checkout['invoice']['id']}/void", [
+            'reason' => 'Issued to the wrong customer',
+        ])->assertOk();
+        $afterVoid = $this->actingAs($manager)->getJson('/api/v1/reports/summary')->assertOk()->json('data');
+        $this->assertSame('0.00', $afterVoid['station_sales']['KITCHEN']['billed_total']);
+        $this->assertSame('0.00', $afterVoid['station_sales']['BAR']['billed_total']);
+    }
 
     public function test_partial_and_full_refunds_enforce_balance_and_reconcile_shift_and_reports(): void
     {
@@ -105,6 +287,8 @@ class ReportsAndRefundsTest extends TestCase
         $this->assertSame('1000.00', $summary['kpis']['billed_total']);
         $this->assertSame('300.00', $summary['kpis']['refunded_total']);
         $this->assertSame('700.00', $summary['kpis']['net_revenue']);
+        $this->assertSame('700.00', $summary['kpis']['collected_total']);
+        $this->assertSame('0.00', $summary['kpis']['owner_due_total']);
         $this->assertSame('700.00', $summary['payments_by_method']['CASH']['net']);
 
         // CSV Export works

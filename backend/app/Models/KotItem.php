@@ -36,4 +36,9 @@ class KotItem extends Model
     {
         return $this->belongsTo(OrderItem::class);
     }
+
+    public function canceller(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelled_by');
+    }
 }

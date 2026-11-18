@@ -3,11 +3,14 @@
 namespace Tests\Feature;
 
 use App\Models\DiningTable;
+use App\Models\Kot;
+use App\Models\KotItem;
 use App\Models\MenuCategory;
 use App\Models\MenuItem;
 use App\Models\ModifierGroup;
 use App\Models\ModifierOption;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\Permission;
 use App\Models\Restaurant;
 use App\Models\Role;
@@ -174,6 +177,119 @@ class OrderCoreTest extends TestCase
         $this->assertSame('1350.00', $merged['subtotal']);
         $this->assertSame('MERGED', Order::query()->findOrFail($transferred['id'])->status);
         $this->assertNull($t2->fresh()->openOrder());
+    }
+
+    public function test_one_order_line_moves_to_another_open_table_and_both_bills_recalculate(): void
+    {
+        [$waiter, , $restaurant, [$t1, $t2], $burger, $cheese] = $this->orderSetup();
+        $source = $this->actingAs($waiter)->postJson("/api/v1/tables/{$t1->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $target = $this->actingAs($waiter)->postJson("/api/v1/tables/{$t2->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items", [
+            'version' => $source['version'], 'menu_item_id' => $burger->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items", [
+            'version' => $source['version'], 'menu_item_id' => $burger->id, 'quantity' => 1,
+            'modifier_option_ids' => [$cheese->id],
+        ])->assertCreated()->json('data');
+        $movedId = $source['items'][1]['id'];
+
+        $result = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items/{$movedId}/transfer", [
+            'version' => $source['version'],
+            'to_dining_table_id' => $t2->id,
+            'reason' => 'Guest at Table 2 ordered this dish',
+        ])->assertOk()->json('data');
+
+        $this->assertCount(1, $result['items']);
+        $this->assertSame('472.50', $result['total']);
+        $this->assertSame('535.50', Order::query()->findOrFail($target['id'])->total);
+        $this->assertSame($target['id'], OrderItem::query()->findOrFail($movedId)->order_id);
+        $this->assertSame('60.00', OrderItem::query()->findOrFail($movedId)->modifier_unit_total);
+        $this->assertDatabaseHas('audit_events', ['restaurant_id' => $restaurant->id, 'action' => 'order_item.transferred', 'auditable_id' => $movedId]);
+    }
+
+    public function test_sent_item_moves_to_new_table_without_a_second_kot(): void
+    {
+        [$waiter, $manager, , [$t1, $t2], $burger] = $this->orderSetup();
+        $source = $this->actingAs($waiter)->postJson("/api/v1/tables/{$t1->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items", [
+            'version' => $source['version'], 'menu_item_id' => $burger->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $itemId = $source['items'][0]['id'];
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/send", [
+            'version' => $source['version'],
+        ])->assertCreated()->json('data');
+
+        $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items/{$itemId}/transfer", [
+            'version' => $source['version'], 'to_dining_table_id' => $t2->id,
+            'reason' => 'Guest moved to Table 2',
+        ])->assertOk();
+
+        $this->assertSame(1, KotItem::query()->count());
+        $this->assertSame(1, Kot::query()->count());
+        $this->assertSame('T1', $this->actingAs($manager)->getJson('/api/v1/kots')->assertOk()->json('data.0.table.code'));
+        $this->assertSame('472.50', Order::query()->where('dining_table_id', $t2->id)->firstOrFail()->total);
+        $this->assertSame('0.00', Order::query()->findOrFail($source['id'])->total);
+    }
+
+    public function test_served_item_cannot_move_to_another_table(): void
+    {
+        [$waiter, , , [$t1, $t2], $burger] = $this->orderSetup();
+        $source = $this->actingAs($waiter)->postJson("/api/v1/tables/{$t1->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items", [
+            'version' => $source['version'], 'menu_item_id' => $burger->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $itemId = $source['items'][0]['id'];
+        OrderItem::query()->findOrFail($itemId)->update(['status' => 'SERVED', 'sent_quantity' => 1, 'served_quantity' => 1]);
+
+        $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items/{$itemId}/transfer", [
+            'version' => $source['version'], 'to_dining_table_id' => $t2->id,
+            'reason' => 'Attempt to move served food',
+        ])->assertConflict();
+
+        $this->assertSame($source['id'], OrderItem::query()->findOrFail($itemId)->order_id);
+        $this->assertNull($t2->fresh()->openOrder());
+    }
+
+    public function test_item_transfer_rejects_recorded_payment_without_changing_either_check(): void
+    {
+        [$waiter, , , [$t1, $t2], $burger] = $this->orderSetup();
+        $source = $this->actingAs($waiter)->postJson("/api/v1/tables/{$t1->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items", [
+            'version' => $source['version'], 'menu_item_id' => $burger->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $itemId = $source['items'][0]['id'];
+        Order::query()->findOrFail($source['id'])->update(['paid_amount' => 100, 'status' => 'PARTIALLY_PAID']);
+
+        $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items/{$itemId}/transfer", [
+            'version' => $source['version'], 'to_dining_table_id' => $t2->id,
+            'reason' => 'Guest moved this item',
+        ])->assertConflict();
+
+        $this->assertSame($source['id'], OrderItem::query()->findOrFail($itemId)->order_id);
+        $this->assertNull($t2->fresh()->openOrder());
+    }
+
+    public function test_item_transfer_cannot_target_another_restaurants_table(): void
+    {
+        [$waiter, , , [$t1], $burger] = $this->orderSetup();
+        $otherRestaurant = Restaurant::query()->create(['name' => 'Other Cafe', 'timezone' => 'Asia/Dhaka', 'currency_code' => 'BDT']);
+        $otherZone = Zone::query()->create(['restaurant_id' => $otherRestaurant->id, 'name' => 'Indoor', 'active' => true]);
+        $otherTable = DiningTable::query()->create([
+            'restaurant_id' => $otherRestaurant->id, 'zone_id' => $otherZone->id,
+            'code' => 'T1', 'display_name' => 'Other Table', 'capacity' => 2, 'active' => true,
+        ]);
+        $source = $this->actingAs($waiter)->postJson("/api/v1/tables/{$t1->id}/orders", ['guest_count' => 2])->assertCreated()->json('data');
+        $source = $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items", [
+            'version' => $source['version'], 'menu_item_id' => $burger->id, 'quantity' => 1,
+        ])->assertCreated()->json('data');
+        $itemId = $source['items'][0]['id'];
+
+        $this->actingAs($waiter)->postJson("/api/v1/orders/{$source['id']}/items/{$itemId}/transfer", [
+            'version' => $source['version'], 'to_dining_table_id' => $otherTable->id,
+            'reason' => 'Cross tenant attempt',
+        ])->assertNotFound();
+
+        $this->assertSame($source['id'], OrderItem::query()->findOrFail($itemId)->order_id);
     }
 
     public function test_open_order_can_reserve_and_release_multiple_dining_tables_for_one_party(): void
