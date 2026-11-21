@@ -1966,6 +1966,7 @@ export default function FoundationApp() {
                 <span><i className="legend-swatch swatch-available" /> Available / Free</span>
                 <span><i className="legend-swatch swatch-open" /> Active Order / KOT</span>
                 <span><i className="legend-swatch swatch-bill" /> Bill Requested / Payment</span>
+                <span><i className="legend-swatch swatch-inactive" /> Deactivated</span>
                 <span><i className="legend-chair-icon" /> Filled Chair = Seated Guest</span>
               </div>
             </div>
@@ -2064,7 +2065,7 @@ function FloorTableCard({
     table.capacity <= 2 ? 'shape-round' : table.capacity >= 6 ? 'shape-banquet' : 'shape-square'
 
   return (
-    <article className={`table-card floor-table-unit status-${table.status.toLowerCase()} ${shapeClass}`}>
+    <article className={`table-card floor-table-unit status-${table.active ? table.status.toLowerCase() : 'inactive'} ${shapeClass}`}>
       <div className="dining-rig">
         <div className="chair-row chair-row-top" aria-hidden="true">
           {topChairs.map((c) => (
