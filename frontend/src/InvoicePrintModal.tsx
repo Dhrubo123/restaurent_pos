@@ -2,7 +2,79 @@ import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { OrderRecord } from './OrderWorkspace.tsx'
 
+type IntegratedPrinterBridge = {
+  printHtml: (html: string, title: string) => void
+}
+
+declare global {
+  interface Window {
+    PosPrinter?: IntegratedPrinterBridge
+  }
+}
+
+function buildIntegratedPrinterDocument(paperWrapEl: HTMLElement, title: string): string {
+  const headAssets = Array.from(document.head.querySelectorAll('style, link[rel="stylesheet"]'))
+    .map((node) => node.outerHTML)
+    .join('\n')
+  const baseHref = document.baseURI.replaceAll('&', '&amp;').replaceAll('"', '&quot;')
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=576, initial-scale=1" />
+  <base href="${baseHref}" />
+  <title>${title}</title>
+  ${headAssets}
+  <style>
+    * { box-sizing: border-box !important; }
+    html, body {
+      width: 576px !important;
+      min-width: 576px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: visible !important;
+      background: #fff !important;
+      color: #000 !important;
+    }
+    body > * { display: none !important; }
+    body > .thermal-print-root {
+      display: block !important;
+      width: 576px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #fff !important;
+    }
+    .thermal-print-root .kot-paper {
+      display: block !important;
+      width: 576px !important;
+      min-height: 0 !important;
+      margin: 0 !important;
+      padding: 24px 20px !important;
+      border: 0 !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      background: #fff !important;
+      color: #000 !important;
+      font-family: "Courier New", Courier, monospace !important;
+    }
+    .thermal-print-root .kot-paper-second-copy {
+      margin-top: 16px !important;
+      padding-top: 24px !important;
+      border-top: 2px dashed #000 !important;
+    }
+  </style>
+</head>
+<body><div class="thermal-print-root">${paperWrapEl.innerHTML}</div></body>
+</html>`
+}
+
 export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'Clique Cafe 80mm Slip'): void {
+  if (paperWrapEl && window.PosPrinter?.printHtml) {
+    window.PosPrinter.printHtml(buildIntegratedPrinterDocument(paperWrapEl, docTitle), docTitle)
+    return
+  }
+
   const isMobileOrTablet =
     typeof navigator !== 'undefined' &&
     (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk/i.test(navigator.userAgent) ||
@@ -646,7 +718,7 @@ export default function InvoicePrintModal({
                       : invoice.status.replaceAll('_', ' ')}
                 </span>
               </div>
-              <div className="receipt-dev-credit">Developed by Tech Base</div>
+              <div className="receipt-dev-credit">Powered by Clique IT</div>
             </article>
           ))}
         </div>

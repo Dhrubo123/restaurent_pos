@@ -1030,7 +1030,7 @@ export default function ReportsWorkspace({
             Period: {fromDate} to {toDate} · Generated {new Date().toLocaleDateString()}
           </span>
         </div>
-        <div className="tech-base-badge">Developed by Tech Base</div>
+        <div className="tech-base-badge">Powered by Clique IT</div>
       </footer>
     </div>
   )

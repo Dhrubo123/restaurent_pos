@@ -237,7 +237,7 @@ export default function KotPrintModal({ kots, busy, onClose, onReprint }: Props)
                   <span>Total {kot.station} Qty: {totalQty}</span>
                   <span>NO PRICES — KITCHEN COPY</span>
                 </div>
-                <div className="receipt-dev-credit">Developed by Tech Base</div>
+                <div className="receipt-dev-credit">Powered by Clique IT</div>
               </article>
             )
           })}

@@ -28,6 +28,7 @@ Route::prefix('v1')->middleware('web')->group(function () {
 
     Route::middleware('auth')->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
+        Route::post('/auth/unlock', [AuthController::class, 'unlock'])->middleware('throttle:5,1');
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::get('/floor', FloorController::class)->middleware('can:view-floor');
         Route::get('/menu', MenuController::class);
@@ -62,6 +63,8 @@ Route::prefix('v1')->middleware('web')->group(function () {
         Route::post('/inventory/items/{inventoryItem}/adjust', [InventoryController::class, 'adjustStock']);
         Route::post('/inventory/suppliers', [InventoryController::class, 'storeSupplier']);
         Route::post('/inventory/purchases', [InventoryController::class, 'recordPurchase']);
+        Route::post('/inventory/purchases/{purchaseOrder}/bill', [InventoryController::class, 'uploadPurchaseBill']);
+        Route::get('/inventory/purchases/{purchaseOrder}/bill', [InventoryController::class, 'showPurchaseBill']);
         Route::put('/inventory/recipes/{menuItem}', [InventoryController::class, 'syncRecipe']);
 
         Route::get('/staff', [StaffController::class, 'index']);

@@ -24,6 +24,7 @@ import type { OwnerSummaryData } from './OwnerWorkspace.tsx'
 
 type User = {
   name: string
+  email: string
   roles: string[]
   permissions: string[]
   restaurant: { name: string }
@@ -68,6 +69,8 @@ class ApiFailure extends Error {
 }
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const idleLockMs = 5 * 60 * 1000
+const lastActivityStorageKey = 'clique_pos_last_activity_at_v1'
 
 async function request<T>(path: string, csrfToken = '', options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
@@ -75,7 +78,7 @@ async function request<T>(path: string, csrfToken = '', options: RequestInit = {
     ...options,
     headers: {
       Accept: 'application/json',
-      'Content-Type': 'application/json',
+      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
       ...options.headers,
     },
@@ -115,6 +118,7 @@ export default function FoundationApp() {
   const [reportData, setReportData] = useState<ReportSummaryData | null>(null)
   const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([])
   const [inventoryData, setInventoryData] = useState<InventoryData | null>(null)
+  const [purchaseDate, setPurchaseDate] = useState('')
   const [staffList, setStaffList] = useState<StaffRecord[]>([])
   const [staffRoleOptions, setStaffRoleOptions] = useState<StaffRoleOption[]>([])
   const [ownerData, setOwnerData] = useState<OwnerSummaryData | null>(null)
@@ -129,6 +133,10 @@ export default function FoundationApp() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({})
+  const [isLocked, setIsLocked] = useState(false)
+  const [unlockPassword, setUnlockPassword] = useState('')
+  const [unlockError, setUnlockError] = useState('')
+  const [unlockBusy, setUnlockBusy] = useState(false)
   const [tableDraft, setTableDraft] = useState<TableDraft | null>(null)
   const [zoneDraft, setZoneDraft] = useState<ZoneDraft | null>(null)
   const [showZones, setShowZones] = useState(false)
@@ -226,9 +234,23 @@ export default function FoundationApp() {
     setAuditEvents(result.data)
   }
 
-  const loadInventory = async () => {
-    const result = await request<{ data: InventoryData }>('/inventory')
+  const loadInventory = async (date = purchaseDate) => {
+    const query = date ? `?received_date=${encodeURIComponent(date)}` : ''
+    const result = await request<{ data: InventoryData }>(`/inventory${query}`)
     setInventoryData(result.data)
+  }
+
+  const filterPurchaseDate = async (date: string) => {
+    resetMessages()
+    setBusy(true)
+    try {
+      await loadInventory(date)
+      setPurchaseDate(date)
+    } catch (caught) {
+      handleFailure(caught)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const loadStaff = async () => {
@@ -370,6 +392,59 @@ export default function FoundationApp() {
   }, [user, zones, orders, menuCategories, taxCategories, modifierGroups, recentInvoices])
 
   useEffect(() => {
+    if (!user || isLocked) return
+
+    let idleTimer = 0
+
+    const lockPos = () => {
+      setPrintKots([])
+      setPrintInvoice(null)
+      setTableDraft(null)
+      setZoneDraft(null)
+      setShowZones(false)
+      setShowTableGroup(false)
+      setUnlockPassword('')
+      setUnlockError('')
+      setIsLocked(true)
+    }
+
+    const scheduleLock = (activityAt: number) => {
+      window.clearTimeout(idleTimer)
+      const remaining = idleLockMs - (Date.now() - activityAt)
+      if (remaining <= 0) {
+        lockPos()
+        return
+      }
+      idleTimer = window.setTimeout(lockPos, remaining)
+    }
+
+    const recordActivity = () => {
+      const activityAt = Date.now()
+      localStorage.setItem(lastActivityStorageKey, String(activityAt))
+      scheduleLock(activityAt)
+    }
+
+    const checkElapsedTime = () => {
+      if (document.visibilityState !== 'visible') return
+      const storedActivity = Number(localStorage.getItem(lastActivityStorageKey))
+      const activityAt = Number.isFinite(storedActivity) && storedActivity > 0 ? storedActivity : Date.now()
+      if (!storedActivity) localStorage.setItem(lastActivityStorageKey, String(activityAt))
+      scheduleLock(activityAt)
+    }
+
+    const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'touchstart']
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, recordActivity, { passive: true }))
+    document.addEventListener('visibilitychange', checkElapsedTime)
+    checkElapsedTime()
+
+    return () => {
+      window.clearTimeout(idleTimer)
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, recordActivity))
+      document.removeEventListener('visibilitychange', checkElapsedTime)
+    }
+  }, [user, isLocked])
+
+  useEffect(() => {
     void (async () => {
       try {
         await refreshCsrf()
@@ -464,6 +539,8 @@ export default function FoundationApp() {
       setCsrfToken(result.token)
       setReportData(null)
       setAuditEvents([])
+      localStorage.setItem(lastActivityStorageKey, String(Date.now()))
+      setIsLocked(false)
       setUser(result.data)
       await bootstrapUser(result.data)
     } catch (caught) {
@@ -490,6 +567,10 @@ export default function FoundationApp() {
       setInventoryData(null)
       setStaffList([])
       localStorage.removeItem('clique_pos_offline_cache_v1')
+      localStorage.removeItem(lastActivityStorageKey)
+      setIsLocked(false)
+      setUnlockPassword('')
+      setUnlockError('')
       setEmail('')
       setPassword('')
       setActiveTab('floor')
@@ -498,6 +579,37 @@ export default function FoundationApp() {
       handleFailure(caught)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const unlockPos = async (event: FormEvent) => {
+    event.preventDefault()
+    setUnlockError('')
+    setUnlockBusy(true)
+
+    try {
+      await request('/auth/unlock', csrfToken, {
+        method: 'POST',
+        body: JSON.stringify({ password: unlockPassword }),
+      })
+      localStorage.setItem(lastActivityStorageKey, String(Date.now()))
+      setUnlockPassword('')
+      setIsLocked(false)
+    } catch (caught) {
+      if (caught instanceof ApiFailure && caught.status === 401) {
+        localStorage.removeItem(lastActivityStorageKey)
+        setUser(null)
+        setIsLocked(false)
+        setUnlockPassword('')
+        setError('Your session expired. Sign in again with your email and password.')
+        await refreshCsrf()
+      } else if (caught instanceof ApiFailure) {
+        setUnlockError(caught.errors.password?.[0] ?? caught.message)
+      } else {
+        setUnlockError('Could not verify the password. Check the internet connection and try again.')
+      }
+    } finally {
+      setUnlockBusy(false)
     }
   }
 
@@ -1402,6 +1514,22 @@ export default function FoundationApp() {
     }
   }
 
+  const uploadPurchaseBill = async (purchaseId: number, file: File) => {
+    resetMessages()
+    setBusy(true)
+    try {
+      const body = new FormData()
+      body.append('bill', file)
+      await request(`/inventory/purchases/${purchaseId}/bill`, csrfToken, { method: 'POST', body })
+      await loadInventory()
+      setSuccess('Purchase bill copy uploaded.')
+    } catch (caught) {
+      handleFailure(caught)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const syncMenuItemRecipe = async (
     menuItemId: number,
     ingredients: { inventory_item_id: number; quantity: number }[],
@@ -1717,10 +1845,38 @@ export default function FoundationApp() {
       <p className="brand-copy">Crafted for Clique Café — fast table service, espresso & kitchen routing, and seamless cashier checkout.</p>
       <div className="service-pills"><span>Coffee</span><span>Bistro</span><span>Desserts</span></div>
     </section>
-    <section className="login-panel"><form className="login-card" onSubmit={login}><p className="eyebrow coral">CLIQUE CAFÉ · POS</p><h2>Sign in to your shift</h2><p className="muted">Use your Owner/Admin or Staff account credentials.</p>{error && <Alert message={error} />}{success && <Success message={success} />}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required /><FieldError errors={fieldErrors.email} /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /><FieldError errors={fieldErrors.password} /></label><button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button><p className="demo-note">Clique Café POS · Developed by Tech Base</p></form></section>
+    <section className="login-panel"><form className="login-card" onSubmit={login}><p className="eyebrow coral">CLIQUE CAFÉ · POS</p><h2>Sign in to your shift</h2><p className="muted">Use your Owner/Admin or Staff account credentials.</p>{error && <Alert message={error} />}{success && <Success message={success} />}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required /><FieldError errors={fieldErrors.email} /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /><FieldError errors={fieldErrors.password} /></label><button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button><p className="demo-note">Clique Café POS · Powered by Clique IT</p></form></section>
   </main>
 
   return <div className="dashboard-shell">
+    {isLocked && (
+      <div className="session-lock-backdrop" role="dialog" aria-modal="true" aria-labelledby="session-lock-title">
+        <form className="session-lock-card" onSubmit={unlockPos}>
+          <img src="/clique-cafe-logo.jpg" alt="" className="session-lock-logo" />
+          <p className="eyebrow coral">SECURE POS LOCK</p>
+          <h2 id="session-lock-title">Welcome back, {user.name}</h2>
+          <p className="muted">This screen locked after 5 minutes without activity. Enter your password to continue the same shift.</p>
+          <label>
+            Password
+            <input
+              autoFocus
+              type="password"
+              value={unlockPassword}
+              onChange={(event) => setUnlockPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          {unlockError && <p className="session-lock-error" role="alert">{unlockError}</p>}
+          <button className="primary" disabled={unlockBusy}>
+            {unlockBusy ? 'Unlocking…' : 'Unlock POS'}
+          </button>
+          <button type="button" className="session-lock-signout" disabled={unlockBusy} onClick={logout}>
+            Sign in with a different account
+          </button>
+        </form>
+      </div>
+    )}
     <aside className="sidebar">
       <div className="logo-row">
         <img src="/clique-cafe-logo.jpg" alt="Clique Café" className="brand-logo-sidebar" />
@@ -1827,6 +1983,8 @@ export default function FoundationApp() {
         <InventoryWorkspace
           restaurantName={user.restaurant.name}
           inventory={inventoryData}
+          purchaseDate={purchaseDate}
+          onPurchaseDateChange={filterPurchaseDate}
           menuCategories={menuCategories}
           busy={busy}
           onRefresh={loadInventory}
@@ -1834,6 +1992,8 @@ export default function FoundationApp() {
           onAdjustStock={adjustInventoryStock}
           onSaveSupplier={saveSupplier}
           onRecordPurchase={recordPurchaseOrder}
+          onUploadBill={user.roles.includes('supervisor') || user.roles.includes('admin') ? uploadPurchaseBill : undefined}
+          billUrl={user.roles.includes('admin') ? (id) => `${apiBase}/inventory/purchases/${id}/bill` : undefined}
           onSyncRecipe={syncMenuItemRecipe}
         />
       ) : activeTab === 'reports' ? (
@@ -1977,7 +2137,7 @@ export default function FoundationApp() {
 
       <footer className="app-workspace-footer no-print">
         <span>{user.restaurant.name || 'Clique Cafe'} · Point of Sale & Restaurant Management</span>
-        <strong>Developed by Tech Base</strong>
+        <strong>Powered by Clique IT</strong>
       </footer>
     </main>
     {tableDraft && <TableModal draft={tableDraft} zones={zones.filter((zone) => zone.active)} errors={fieldErrors} busy={busy} onChange={setTableDraft} onClose={() => { setTableDraft(null); setFieldErrors({}) }} onSubmit={saveTable} />}

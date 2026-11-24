@@ -14,9 +14,12 @@ use App\Support\Audit;
 use App\Support\InventoryStock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class InventoryController extends Controller
 {
@@ -24,6 +27,7 @@ class InventoryController extends Controller
     {
         $this->authorizeInventory($request);
         $restaurantId = $request->user()->restaurant_id;
+        $filters = $request->validate(['received_date' => ['nullable', 'date_format:Y-m-d']]);
 
         $items = InventoryItem::query()
             ->where('restaurant_id', $restaurantId)
@@ -36,12 +40,24 @@ class InventoryController extends Controller
             ->orderBy('name')
             ->get();
 
-        $purchaseOrders = PurchaseOrder::query()
+        $purchases = PurchaseOrder::query()
             ->where('restaurant_id', $restaurantId)
             ->with(['supplier:id,name', 'receiver:id,name', 'items.inventoryItem:id,sku,name,unit'])
             ->latest('received_at')
-            ->limit(40)
-            ->get();
+            ->latest('id');
+        if (! empty($filters['received_date'])) {
+            $timezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
+            $day = Carbon::parse($filters['received_date'], $timezone)->startOfDay();
+            $purchases->where('received_at', '>=', $day->copy()->utc())
+                ->where('received_at', '<', $day->copy()->addDay()->utc());
+        } else {
+            $purchases->limit(40);
+        }
+        $purchaseOrders = $purchases->get();
+        $disk = Storage::disk('local');
+        foreach ($purchaseOrders as $purchaseOrder) {
+            $purchaseOrder->setAttribute('has_bill_copy', $disk->exists($this->purchaseBillPath($purchaseOrder)));
+        }
 
         $recipes = MenuItemIngredient::query()
             ->where('restaurant_id', $restaurantId)
@@ -93,7 +109,7 @@ class InventoryController extends Controller
 
         $validated = $request->validate([
             'sku' => [
-                'required',
+                'nullable',
                 'string',
                 'max:40',
                 Rule::unique('inventory_items', 'sku')->where('restaurant_id', $restaurantId),
@@ -112,7 +128,9 @@ class InventoryController extends Controller
 
             $item = InventoryItem::query()->create([
                 'restaurant_id' => $restaurantId,
-                'sku' => Str::upper(trim($validated['sku'])),
+                'sku' => isset($validated['sku'])
+                    ? Str::upper(trim($validated['sku']))
+                    : 'INV-'.Str::ulid(),
                 'name' => trim($validated['name']),
                 'category' => trim($validated['category']),
                 'unit' => $validated['unit'],
@@ -384,7 +402,7 @@ class InventoryController extends Controller
                     'unit_cost' => number_format($purchaseCost, 2, '.', ''),
                     'reference_type' => PurchaseOrder::class,
                     'reference_id' => $po->id,
-                    'reason' => "Purchase {$po->po_number}" . ($po->reference_number ? " ({$po->reference_number})" : ''),
+                    'reason' => "Purchase {$po->po_number}".($po->reference_number ? " ({$po->reference_number})" : ''),
                     'actor_id' => $user->id,
                     'occurred_at' => now(),
                 ]);
@@ -400,6 +418,46 @@ class InventoryController extends Controller
                 'data' => $po->load(['supplier:id,name', 'receiver:id,name', 'items.inventoryItem:id,sku,name,unit']),
             ], 201);
         });
+    }
+
+    public function uploadPurchaseBill(Request $request, PurchaseOrder $purchaseOrder): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($purchaseOrder->restaurant_id === $user->restaurant_id, 404);
+        abort_unless($user->roles()->whereIn('key', ['supervisor', 'admin'])->exists(), 403);
+
+        $validated = $request->validate([
+            'bill' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
+        ]);
+
+        $path = $this->purchaseBillPath($purchaseOrder);
+        $saved = Storage::disk('local')->putFileAs(dirname($path), $validated['bill'], basename($path));
+        abort_if($saved === false, 500, 'Could not save the bill copy.');
+
+        Audit::record($request, 'purchase_order.bill_uploaded', $purchaseOrder);
+
+        return response()->json(['message' => 'Bill copy uploaded.']);
+    }
+
+    public function showPurchaseBill(Request $request, PurchaseOrder $purchaseOrder): StreamedResponse
+    {
+        $user = $request->user();
+        abort_unless($purchaseOrder->restaurant_id === $user->restaurant_id, 404);
+        abort_unless($user->roles()->where('key', 'admin')->exists(), 403);
+
+        $disk = Storage::disk('local');
+        $path = $this->purchaseBillPath($purchaseOrder);
+        abort_unless($disk->exists($path), 404);
+
+        return $disk->response($path, null, [
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    private function purchaseBillPath(PurchaseOrder $purchaseOrder): string
+    {
+        return "purchase-bills/{$purchaseOrder->restaurant_id}/{$purchaseOrder->id}";
     }
 
     public function syncRecipe(Request $request, MenuItem $menuItem): JsonResponse

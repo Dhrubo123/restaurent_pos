@@ -81,4 +81,41 @@ class AuthenticationTest extends TestCase
 
         $this->assertGuest();
     }
+
+    public function test_authenticated_user_can_unlock_the_pos_with_their_password(): void
+    {
+        $password = Str::password(24);
+        $user = User::factory()->create([
+            'active' => true,
+            'password' => Hash::make($password),
+        ]);
+
+        $this->actingAs($user)
+            ->postJson('/api/v1/auth/unlock', ['password' => $password])
+            ->assertOk()
+            ->assertJsonPath('message', 'POS unlocked.');
+
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_wrong_password_cannot_unlock_the_pos(): void
+    {
+        $user = User::factory()->create([
+            'active' => true,
+            'password' => Hash::make(Str::password(24)),
+        ]);
+
+        $this->actingAs($user)
+            ->postJson('/api/v1/auth/unlock', ['password' => 'not-the-right-password'])
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.password.0', 'The password is incorrect.');
+
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_guest_cannot_use_the_pos_unlock_endpoint(): void
+    {
+        $this->postJson('/api/v1/auth/unlock', ['password' => 'any-password'])
+            ->assertUnauthorized();
+    }
 }

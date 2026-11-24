@@ -1152,7 +1152,7 @@ export default function CashierWorkspace({
                   <span>Manager Sign: ___________________</span>
                   <span>{restaurantName}</span>
                 </div>
-                <div className="receipt-dev-credit">Developed by Tech Base</div>
+                <div className="receipt-dev-credit">Powered by Clique IT</div>
               </article>
             </div>
 

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
@@ -44,6 +45,32 @@ class AuthController extends Controller
     public function me(Request $request): JsonResponse
     {
         return response()->json(['data' => $this->userPayload($request)]);
+    }
+
+    public function unlock(Request $request): JsonResponse
+    {
+        $credentials = $request->validate([
+            'password' => ['required', 'string', 'max:200'],
+        ]);
+
+        $user = $request->user();
+
+        try {
+            $passwordIsValid = $user !== null
+                && $user->active
+                && Hash::check($credentials['password'], $user->password);
+        } catch (RuntimeException $exception) {
+            report($exception);
+            $passwordIsValid = false;
+        }
+
+        if (! $passwordIsValid) {
+            throw ValidationException::withMessages([
+                'password' => ['The password is incorrect.'],
+            ]);
+        }
+
+        return response()->json(['message' => 'POS unlocked.']);
     }
 
     public function logout(Request $request): JsonResponse

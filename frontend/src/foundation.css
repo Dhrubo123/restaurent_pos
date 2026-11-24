@@ -195,6 +195,48 @@
 .ticket-header h2,.brand-panel h1 { color: #ffffff!important; }
 .tablet-signout{display:none}
 
+.session-lock-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:1000;
+  display:grid;
+  place-items:center;
+  padding:24px;
+  overflow-y:auto;
+  background:linear-gradient(145deg,#10211d 0%,#1c1917 58%,#472a1c 100%);
+}
+.session-lock-card{
+  display:grid;
+  gap:14px;
+  width:min(430px,100%);
+  padding:34px;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:22px;
+  background:#ffffff;
+  box-shadow:0 30px 90px rgba(0,0,0,.42);
+}
+.session-lock-logo{
+  width:72px;
+  height:72px;
+  margin:0 auto 4px;
+  border-radius:50%;
+  object-fit:cover;
+}
+.session-lock-card h2{text-align:center;color:var(--ink)}
+.session-lock-card>p{text-align:center}
+.session-lock-card label{display:grid;gap:7px;color:var(--ink);font-size:.86rem;font-weight:800}
+.session-lock-card input{width:100%;height:50px;padding:0 14px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font:inherit}
+.session-lock-card input:focus{border-color:var(--coral);outline:0;box-shadow:0 0 0 3px rgba(236,107,30,.15)}
+.session-lock-card .primary{width:100%;min-height:50px}
+.session-lock-error{padding:10px 12px;border:1px solid #f1c1b6;border-radius:9px;background:#fff4f1;color:#a63f2c;font-size:.8rem;font-weight:700}
+.session-lock-signout{border:0;background:transparent;color:var(--muted);font-size:.8rem;font-weight:700;text-decoration:underline}
+.session-lock-signout:disabled{opacity:.5}
+
+@media(max-width:520px){
+  .session-lock-backdrop{padding:16px}
+  .session-lock-card{padding:28px 22px}
+}
+
 @media(max-width:900px){
   .sidebar{height:auto!important;min-height:68px;padding:6px 10px!important}
   .sidebar nav{display:flex!important;overflow-x:auto;gap:4px;-webkit-overflow-scrolling:touch}

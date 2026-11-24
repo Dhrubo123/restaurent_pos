@@ -11,11 +11,66 @@ use App\Models\Role;
 use App\Models\User;
 use App\Models\Zone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class InventoryAndStaffTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_supervisor_can_upload_a_purchase_bill_and_only_own_restaurant_admin_can_view_it(): void
+    {
+        Storage::fake('local');
+        [$waiter, $manager, $admin] = $this->setupFixtures();
+        $supervisor = User::factory()->create(['restaurant_id' => $manager->restaurant_id, 'active' => true]);
+        $supervisor->roles()->attach(Role::query()->firstOrCreate(['key' => 'supervisor'], ['name' => 'Supervisor']));
+
+        $stock = $this->actingAs($manager)->postJson('/api/v1/inventory/items', [
+            'name' => 'Beef Patty',
+            'category' => 'Meat',
+            'unit' => 'pcs',
+            'reorder_level' => 0,
+            'unit_cost' => 100,
+        ])->assertCreated()->json('data');
+        $this->assertMatchesRegularExpression('/^INV-[0-9A-Z]{26}$/', $stock['sku']);
+
+        $purchase = $this->postJson('/api/v1/inventory/purchases', [
+            'items' => [['inventory_item_id' => $stock['id'], 'quantity' => 5, 'unit_cost' => 100]],
+        ])->assertCreated()->json('data');
+        $url = "/api/v1/inventory/purchases/{$purchase['id']}/bill";
+        $bill = '%PDF-1.4 test purchase bill';
+
+        $this->actingAs($waiter)->post($url, [
+            'bill' => UploadedFile::fake()->createWithContent('bill.pdf', $bill),
+        ])->assertForbidden();
+        $this->actingAs($supervisor)->postJson($url, [
+            'bill' => UploadedFile::fake()->createWithContent('bill.txt', 'Not a bill'),
+        ])->assertUnprocessable()->assertJsonValidationErrors('bill');
+        $this->actingAs($supervisor)->post($url, [
+            'bill' => UploadedFile::fake()->createWithContent('bill.pdf', $bill),
+        ])->assertOk();
+        $this->get($url)->assertForbidden();
+
+        $this->actingAs($admin)->get($url)->assertOk()->assertStreamedContent($bill);
+        $this->getJson('/api/v1/inventory')->assertOk()
+            ->assertJsonPath('data.purchase_orders.0.has_bill_copy', true)
+            ->assertJsonPath('data.items.0.current_stock', '5.000');
+        $this->getJson('/api/v1/inventory?received_date=2000-01-01')->assertOk()
+            ->assertJsonCount(0, 'data.purchase_orders');
+        $this->getJson('/api/v1/inventory?received_date='.now('Asia/Dhaka')->toDateString())->assertOk()
+            ->assertJsonPath('data.purchase_orders.0.id', $purchase['id']);
+
+        $otherRestaurant = Restaurant::query()->create([
+            'name' => 'Other Restaurant',
+            'timezone' => 'Asia/Dhaka',
+            'currency_code' => 'BDT',
+            'active' => true,
+        ]);
+        $otherAdmin = User::factory()->create(['restaurant_id' => $otherRestaurant->id, 'active' => true]);
+        $otherAdmin->roles()->attach(Role::query()->where('key', 'admin')->firstOrFail());
+        $this->actingAs($otherAdmin)->get($url)->assertNotFound();
+    }
 
     public function test_purchase_order_recipe_mapping_and_kot_auto_deduction_with_auto_86(): void
     {

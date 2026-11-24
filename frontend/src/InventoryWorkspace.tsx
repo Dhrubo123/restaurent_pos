@@ -49,6 +49,7 @@ export type PurchaseOrderRecord = {
   total: string
   notes: string | null
   received_at: string
+  has_bill_copy?: boolean
   supplier?: { id: number; name: string } | null
   receiver?: { id: number; name: string } | null
   items: PurchaseOrderItemRecord[]
@@ -106,6 +107,8 @@ export type InventoryData = {
 type Props = {
   restaurantName: string
   inventory: InventoryData | null
+  purchaseDate: string
+  onPurchaseDateChange: (date: string) => Promise<void>
   menuCategories: MenuCategoryRecord[]
   busy: boolean
   onRefresh: () => Promise<void>
@@ -115,6 +118,8 @@ type Props = {
     payload: { type: 'WASTAGE' | 'ADJUSTMENT'; quantity_delta: number; reason: string },
   ) => Promise<boolean>
   onSaveSupplier: (payload: Record<string, unknown>) => Promise<boolean>
+  onUploadBill?: (id: number, file: File) => Promise<void>
+  billUrl?: (id: number) => string
   onRecordPurchase: (payload: {
     supplier_id?: number | null
     reference_number?: string
@@ -131,6 +136,8 @@ type Props = {
 export default function InventoryWorkspace({
   restaurantName,
   inventory,
+  purchaseDate,
+  onPurchaseDateChange,
   menuCategories,
   busy,
   onRefresh,
@@ -138,6 +145,8 @@ export default function InventoryWorkspace({
   onAdjustStock,
   onSaveSupplier,
   onRecordPurchase,
+  onUploadBill,
+  billUrl,
   onSyncRecipe,
 }: Props) {
   const [subTab, setSubTab] = useState<'items' | 'purchasing' | 'recipes' | 'movements'>('items')
@@ -146,7 +155,6 @@ export default function InventoryWorkspace({
 
   const [itemModal, setItemModal] = useState<{
     id?: number
-    sku: string
     name: string
     category: string
     unit: InventoryItemRecord['unit']
@@ -205,7 +213,6 @@ export default function InventoryWorkspace({
       if (!q) return true
       return (
         item.name.toLowerCase().includes(q) ||
-        item.sku.toLowerCase().includes(q) ||
         item.category.toLowerCase().includes(q)
       )
     })
@@ -216,7 +223,6 @@ export default function InventoryWorkspace({
     if (!itemModal) return
     const ok = await onSaveItem(
       {
-        sku: itemModal.sku,
         name: itemModal.name,
         category: itemModal.category,
         unit: itemModal.unit,
@@ -322,7 +328,6 @@ export default function InventoryWorkspace({
             disabled={busy}
             onClick={() =>
               setItemModal({
-                sku: '',
                 name: '',
                 category: 'Meat & Poultry',
                 unit: 'pcs',
@@ -435,7 +440,7 @@ export default function InventoryWorkspace({
               </div>
               <input
                 className="reports-search-input"
-                placeholder="Search SKU, ingredient or category…"
+                placeholder="Search item name or category…"
                 value={itemSearch}
                 onChange={(e) => setItemSearch(e.target.value)}
               />
@@ -451,7 +456,6 @@ export default function InventoryWorkspace({
               <table className="reports-table">
                 <thead>
                   <tr>
-                    <th>SKU</th>
                     <th>Ingredient / Item</th>
                     <th>Category</th>
                     <th>On-Hand Stock</th>
@@ -472,9 +476,6 @@ export default function InventoryWorkspace({
 
                     return (
                       <tr key={item.id}>
-                        <td>
-                          <span className="sku-tag">{item.sku}</span>
-                        </td>
                         <td>
                           <strong>{item.name}</strong>
                         </td>
@@ -512,7 +513,6 @@ export default function InventoryWorkspace({
                               onClick={() =>
                                 setItemModal({
                                   id: item.id,
-                                  sku: item.sku,
                                   name: item.name,
                                   category: item.category,
                                   unit: item.unit,
@@ -565,6 +565,15 @@ export default function InventoryWorkspace({
                 ＋ New Purchase Bill
               </button>
             </div>
+            <div className="field-row">
+              <label>
+                Received date
+                <input type="date" value={purchaseDate} disabled={busy}
+                  onChange={(event) => void onPurchaseDateChange(event.currentTarget.value)} />
+              </label>
+              {purchaseDate && <button type="button" className="secondary compact" disabled={busy}
+                onClick={() => void onPurchaseDateChange('')}>Show recent purchases</button>}
+            </div>
             {purchaseOrders.length === 0 ? (
               <div className="inline-empty">No purchase bills recorded yet.</div>
             ) : (
@@ -577,6 +586,7 @@ export default function InventoryWorkspace({
                       <th>Items Received</th>
                       <th>Total Cost</th>
                       <th>Date</th>
+                      <th>Bill Copy</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -607,6 +617,25 @@ export default function InventoryWorkspace({
                             hour: '2-digit',
                             minute: '2-digit',
                           })}
+                        </td>
+                        <td>
+                          {po.has_bill_copy && billUrl ? (
+                            <a href={billUrl(po.id)} target="_blank" rel="noopener noreferrer">View bill</a>
+                          ) : po.has_bill_copy ? 'Uploaded' : 'No copy'}
+                          {onUploadBill && (
+                            <div>
+                              <label>
+                                {po.has_bill_copy ? 'Replace bill' : 'Upload bill'}
+                                <input type="file" accept="image/jpeg,image/png,application/pdf" disabled={busy}
+                                  onChange={(event) => {
+                                    const file = event.currentTarget.files?.[0]
+                                    event.currentTarget.value = ''
+                                    if (file) void onUploadBill(po.id, file)
+                                  }}
+                                />
+                              </label>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -701,7 +730,7 @@ export default function InventoryWorkspace({
                       <td>
                         <strong>{menuItem.name}</strong>
                         <div className="muted">
-                          {menuItem.sku} · {menuItem.available ? 'Available' : 'Sold Out (86)'}
+                          {menuItem.available ? 'Available' : 'Sold Out (86)'}
                         </div>
                       </td>
                       <td>৳{sellPrice.toFixed(2)}</td>
@@ -842,15 +871,6 @@ export default function InventoryWorkspace({
             </div>
 
             <div className="field-row">
-              <label>
-                SKU Code
-                <input
-                  required
-                  placeholder="ING-BEEF-01"
-                  value={itemModal.sku}
-                  onChange={(e) => setItemModal({ ...itemModal, sku: e.target.value.toUpperCase() })}
-                />
-              </label>
               <label>
                 Storage Unit
                 <select

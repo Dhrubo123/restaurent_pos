@@ -7,6 +7,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      // The HK526 terminal's installed WebView uses Chromium 66.
+      target: 'chrome66',
+      cssTarget: 'chrome66',
+    },
     server: {
       proxy: {
         '/api': environment.VITE_BACKEND_PROXY_TARGET || 'http://127.0.0.1:8000',
