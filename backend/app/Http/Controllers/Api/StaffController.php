@@ -19,7 +19,6 @@ class StaffController extends Controller
     public function index(Request $request): JsonResponse
     {
         $actor = $this->authorizeStaff($request);
-        $isAdmin = $actor->can('manage-users') || $actor->can('manage-security');
 
         $users = User::query()
             ->where('restaurant_id', $actor->restaurant_id)
@@ -30,7 +29,6 @@ class StaffController extends Controller
             ->map(fn (User $u) => $this->presentUser($u));
 
         $roles = Role::query()
-            ->when(! $isAdmin, fn ($q) => $q->where('key', '!=', 'admin'))
             ->orderBy('id')
             ->get(['id', 'key', 'name']);
 
@@ -38,7 +36,7 @@ class StaffController extends Controller
             'data' => $users,
             'meta' => [
                 'roles' => $roles,
-                'can_assign_admin' => $isAdmin,
+                'can_assign_admin' => true,
             ],
         ]);
     }
@@ -46,7 +44,6 @@ class StaffController extends Controller
     public function store(Request $request): JsonResponse
     {
         $actor = $this->authorizeStaff($request);
-        $isAdmin = $actor->can('manage-users') || $actor->can('manage-security');
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:120'],
@@ -54,10 +51,6 @@ class StaffController extends Controller
             'password' => ['required', 'string', 'min:8', 'max:120'],
             'role_key' => ['required', 'string', Rule::exists('roles', 'key')],
         ]);
-
-        if ($validated['role_key'] === 'admin' && ! $isAdmin) {
-            abort(403, 'Only an administrator can assign the Admin role.');
-        }
 
         return DB::transaction(function () use ($request, $actor, $validated) {
             $role = Role::query()->where('key', $validated['role_key'])->firstOrFail();
@@ -89,9 +82,6 @@ class StaffController extends Controller
     {
         $actor = $this->authorizeStaff($request);
         abort_unless($staff->restaurant_id === $actor->restaurant_id, 404);
-        $this->assertTargetEditable($actor, $staff);
-
-        $isAdmin = $actor->can('manage-users') || $actor->can('manage-security');
 
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:120'],
@@ -104,10 +94,6 @@ class StaffController extends Controller
             ],
             'role_key' => ['sometimes', 'required', 'string', Rule::exists('roles', 'key')],
         ]);
-
-        if (isset($validated['role_key']) && $validated['role_key'] === 'admin' && ! $isAdmin) {
-            abort(403, 'Only an administrator can assign the Admin role.');
-        }
 
         return DB::transaction(function () use ($request, $staff, $validated) {
             $before = [
@@ -142,7 +128,6 @@ class StaffController extends Controller
     {
         $actor = $this->authorizeStaff($request);
         abort_unless($staff->restaurant_id === $actor->restaurant_id, 404);
-        $this->assertTargetEditable($actor, $staff);
 
         $validated = $request->validate([
             'password' => ['required', 'string', 'min:8', 'max:120'],
@@ -176,7 +161,6 @@ class StaffController extends Controller
     {
         $actor = $this->authorizeStaff($request);
         abort_unless($staff->restaurant_id === $actor->restaurant_id, 404);
-        $this->assertTargetEditable($actor, $staff);
 
         $staff->update(['active' => true]);
         Audit::record($request, 'staff.activated', $staff, ['active' => false], ['active' => true]);
@@ -188,7 +172,6 @@ class StaffController extends Controller
     {
         $actor = $this->authorizeStaff($request);
         abort_unless($staff->restaurant_id === $actor->restaurant_id, 404);
-        $this->assertTargetEditable($actor, $staff);
 
         abort_if($staff->id === $actor->id, 409, 'You cannot deactivate your own currently signed-in account.');
 
@@ -226,24 +209,14 @@ class StaffController extends Controller
         ];
     }
 
-    private function assertTargetEditable(User $actor, User $target): void
-    {
-        $isAdmin = $actor->can('manage-users') || $actor->can('manage-security');
-        $targetIsAdmin = $target->roles()->where('key', 'admin')->exists();
-
-        if ($targetIsAdmin && ! $isAdmin) {
-            abort(403, 'Only an administrator can modify an Admin account.');
-        }
-    }
-
     private function authorizeStaff(Request $request): User
     {
         /** @var User $user */
         $user = $request->user();
         abort_unless(
-            $user->can('manage-users') || $user->can('manage-floor') || $user->can('manage-menu'),
+            $user->roles()->where('key', 'admin')->exists(),
             403,
-            'Manager or Administrator permission is required to manage staff accounts.',
+            'Only an administrator can access staff accounts.',
         );
 
         return $user;

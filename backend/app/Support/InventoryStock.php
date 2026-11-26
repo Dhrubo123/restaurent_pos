@@ -57,7 +57,7 @@ final class InventoryStock
                 'unit_cost' => $invItem->unit_cost,
                 'reference_type' => Kot::class,
                 'reference_id' => $kot->id,
-                'reason' => "KOT {$kot->kot_number} · {$deltaQty}x {$orderItem->item_name}",
+                'reason' => "KOT {$kot->kot_number} - {$deltaQty}x {$orderItem->item_name}",
                 'actor_id' => $actorId,
                 'occurred_at' => now(),
             ]);
@@ -111,7 +111,7 @@ final class InventoryStock
                 'unit_cost' => $invItem->unit_cost,
                 'reference_type' => Invoice::class,
                 'reference_id' => $invoice->id,
-                'reason' => "Invoice {$invoice->invoice_number} · {$deltaQty}x {$orderItem->item_name}",
+                'reason' => "Invoice {$invoice->invoice_number} - {$deltaQty}x {$orderItem->item_name}",
                 'actor_id' => $actorId,
                 'occurred_at' => now(),
             ]);

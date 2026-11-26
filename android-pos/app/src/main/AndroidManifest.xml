@@ -6,7 +6,7 @@
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@drawable/clique_cafe_launcher"
         android:label="Clique Cafe POS"
         android:theme="@android:style/Theme.Material.Light"
         android:usesCleartextTraffic="true">

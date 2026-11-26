@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Support\Audit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -54,21 +56,30 @@ class AuthController extends Controller
         ]);
 
         $user = $request->user();
+        abort_unless($user->active && $user->restaurant_id !== null, 403);
+        $supervisors = User::query()
+            ->where('restaurant_id', $user->restaurant_id)
+            ->where('active', true)
+            ->whereHas('roles', fn ($query) => $query->where('key', 'supervisor'))
+            ->get();
 
-        try {
-            $passwordIsValid = $user !== null
-                && $user->active
-                && Hash::check($credentials['password'], $user->password);
-        } catch (RuntimeException $exception) {
-            report($exception);
-            $passwordIsValid = false;
-        }
+        $matchingSupervisors = $supervisors->filter(function (User $supervisor) use ($credentials): bool {
+            try {
+                return Hash::check($credentials['password'], $supervisor->password);
+            } catch (RuntimeException $exception) {
+                report($exception);
 
-        if (! $passwordIsValid) {
+                return false;
+            }
+        });
+
+        if ($matchingSupervisors->count() !== 1) {
             throw ValidationException::withMessages([
-                'password' => ['The password is incorrect.'],
+                'password' => ['Enter the password of an active Supervisor at this restaurant.'],
             ]);
         }
+
+        Audit::record($request, 'pos.unlocked', $user, after: ['session_user' => $user->name], actor: $matchingSupervisors->first());
 
         return response()->json(['message' => 'POS unlocked.']);
     }

@@ -22,7 +22,7 @@ type Props = {
   roleOptions: StaffRoleOption[]
   busy: boolean
   onRefresh: () => Promise<void>
-  onCreateStaff: (payload: {
+  onCreateStaff?: (payload: {
     name: string
     email: string
     password: string
@@ -69,7 +69,7 @@ export default function StaffWorkspace({
 
   const submitCreate = async (event: FormEvent) => {
     event.preventDefault()
-    if (!createModal) return
+    if (!createModal || !onCreateStaff) return
     const ok = await onCreateStaff(createModal)
     if (ok) setCreateModal(null)
   }
@@ -115,21 +115,23 @@ export default function StaffWorkspace({
           </p>
         </div>
         <div className="header-actions">
-          <button
-            type="button"
-            className="primary compact"
-            disabled={busy}
-            onClick={() =>
-              setCreateModal({
-                name: '',
-                email: '',
-                password: '',
-                role_key: roleOptions.find((r) => r.key === 'waiter')?.key ?? roleOptions[0]?.key ?? 'waiter',
-              })
-            }
-          >
-            ＋ Add Staff Account
-          </button>
+          {onCreateStaff && (
+            <button
+              type="button"
+              className="primary compact"
+              disabled={busy}
+              onClick={() =>
+                setCreateModal({
+                  name: '',
+                  email: '',
+                  password: '',
+                  role_key: roleOptions.find((r) => r.key === 'waiter')?.key ?? roleOptions[0]?.key ?? 'waiter',
+                })
+              }
+            >
+              ＋ Add Staff Account
+            </button>
+          )}
           <button type="button" className="secondary compact" disabled={busy} onClick={() => void onRefresh()}>
             ↻
           </button>
@@ -257,7 +259,7 @@ export default function StaffWorkspace({
         </div>
       </section>
 
-      {createModal && (
+      {onCreateStaff && createModal && (
         <div className="modal-backdrop" onMouseDown={() => setCreateModal(null)}>
           <form className="modal" onSubmit={submitCreate} onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-head">

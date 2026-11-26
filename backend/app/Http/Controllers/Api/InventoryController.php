@@ -14,6 +14,7 @@ use App\Support\Audit;
 use App\Support\InventoryStock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -27,6 +28,10 @@ class InventoryController extends Controller
     {
         $this->authorizeInventory($request);
         $restaurantId = $request->user()->restaurant_id;
+        $timezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
+        if ($request->query('received_date') === 'today') {
+            $request->merge(['received_date' => now($timezone)->toDateString()]);
+        }
         $filters = $request->validate(['received_date' => ['nullable', 'date_format:Y-m-d']]);
 
         $items = InventoryItem::query()
@@ -46,7 +51,6 @@ class InventoryController extends Controller
             ->latest('received_at')
             ->latest('id');
         if (! empty($filters['received_date'])) {
-            $timezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
             $day = Carbon::parse($filters['received_date'], $timezone)->startOfDay();
             $purchases->where('received_at', '>=', $day->copy()->utc())
                 ->where('received_at', '<', $day->copy()->addDay()->utc());
@@ -95,6 +99,7 @@ class InventoryController extends Controller
                 'items' => $items,
                 'suppliers' => $suppliers,
                 'purchase_orders' => $purchaseOrders,
+                'received_date' => $filters['received_date'] ?? null,
                 'recipes' => $recipes,
                 'movements' => $movements,
             ],
@@ -318,125 +323,184 @@ class InventoryController extends Controller
             'notes' => ['nullable', 'string', 'max:500'],
             'items' => ['required', 'array', 'min:1'],
             'items.*.inventory_item_id' => [
-                'required',
+                'nullable',
+                'required_without:items.*.name',
                 'integer',
                 Rule::exists('inventory_items', 'id')->where('restaurant_id', $restaurantId),
             ],
+            'items.*.name' => ['nullable', 'required_without:items.*.inventory_item_id', 'string', 'max:120'],
+            'items.*.unit' => ['required_with:items.*.name', Rule::in(InventoryItem::UNITS)],
+            'items.*.category' => ['required_with:items.*.name', Rule::in(['Products', 'Drinks'])],
             'items.*.quantity' => ['required', 'numeric', 'min:0.001', 'max:9999999.999'],
-            'items.*.unit_cost' => ['required', 'numeric', 'min:0', 'max:9999999.99'],
+            'items.*.unit_cost' => ['nullable', 'numeric', 'min:0', 'max:9999999.99'],
+            'bill' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
         ]);
 
-        return DB::transaction(function () use ($request, $user, $restaurantId, $validated) {
-            $poNumber = $this->allocatePoNumber($restaurantId);
-            $subtotal = 0.0;
+        if (isset($validated['bill'])) {
+            $this->authorizeBillUpload($request);
+        }
 
-            $preparedLines = [];
-            foreach ($validated['items'] as $line) {
-                $qty = round((float) $line['quantity'], 3);
-                $cost = round((float) $line['unit_cost'], 2);
-                $lineTotal = round($qty * $cost, 2);
-                $subtotal = round($subtotal + $lineTotal, 2);
+        $billPath = null;
+        try {
+            return DB::transaction(function () use ($request, $user, $restaurantId, $validated, &$billPath) {
+                $poNumber = $this->allocatePoNumber($restaurantId);
+                $subtotal = 0.0;
 
-                $preparedLines[] = [
-                    'inventory_item_id' => (int) $line['inventory_item_id'],
-                    'quantity' => $qty,
-                    'unit_cost' => $cost,
-                    'line_total' => $lineTotal,
-                ];
-            }
+                $preparedLines = [];
+                foreach ($validated['items'] as $line) {
+                    $itemId = $line['inventory_item_id'] ?? $this->resolveReceivedItem($restaurantId, $line)->id;
+                    $qty = round((float) $line['quantity'], 3);
+                    $cost = isset($line['unit_cost']) ? round((float) $line['unit_cost'], 2) : null;
+                    $lineTotal = round($qty * ($cost ?? 0), 2);
+                    $subtotal = round($subtotal + $lineTotal, 2);
 
-            $taxAmount = round((float) ($validated['tax_amount'] ?? 0), 2);
-            $total = round($subtotal + $taxAmount, 2);
+                    $preparedLines[] = [
+                        'inventory_item_id' => (int) $itemId,
+                        'quantity' => $qty,
+                        'unit_cost' => $cost,
+                        'line_total' => $lineTotal,
+                    ];
+                }
 
-            $po = PurchaseOrder::query()->create([
-                'restaurant_id' => $restaurantId,
-                'supplier_id' => $validated['supplier_id'] ?? null,
-                'po_number' => $poNumber,
-                'reference_number' => isset($validated['reference_number']) ? trim($validated['reference_number']) : null,
-                'status' => 'RECEIVED',
-                'subtotal' => number_format($subtotal, 2, '.', ''),
-                'tax_amount' => number_format($taxAmount, 2, '.', ''),
-                'total' => number_format($total, 2, '.', ''),
-                'notes' => isset($validated['notes']) ? trim($validated['notes']) : null,
-                'received_by' => $user->id,
-                'received_at' => now(),
-            ]);
+                $taxAmount = round((float) ($validated['tax_amount'] ?? 0), 2);
+                $total = round($subtotal + $taxAmount, 2);
 
-            foreach ($preparedLines as $line) {
-                /** @var InventoryItem $lockedItem */
-                $lockedItem = InventoryItem::query()
-                    ->whereKey($line['inventory_item_id'])
-                    ->lockForUpdate()
-                    ->firstOrFail();
-
-                $oldStock = max(0.0, (float) $lockedItem->current_stock);
-                $oldCost = (float) $lockedItem->unit_cost;
-                $newQty = $line['quantity'];
-                $purchaseCost = $line['unit_cost'];
-
-                $weightedCost = ($oldStock + $newQty) > 0
-                    ? round((($oldStock * $oldCost) + ($newQty * $purchaseCost)) / ($oldStock + $newQty), 2)
-                    : $purchaseCost;
-
-                $newStock = round((float) $lockedItem->current_stock + $newQty, 3);
-
-                $lockedItem->update([
-                    'current_stock' => number_format($newStock, 3, '.', ''),
-                    'unit_cost' => number_format($weightedCost, 2, '.', ''),
-                ]);
-
-                PurchaseOrderItem::query()->create([
-                    'purchase_order_id' => $po->id,
-                    'inventory_item_id' => $lockedItem->id,
-                    'quantity' => number_format($newQty, 3, '.', ''),
-                    'unit_cost' => number_format($purchaseCost, 2, '.', ''),
-                    'line_total' => number_format($line['line_total'], 2, '.', ''),
-                ]);
-
-                StockMovement::query()->create([
+                $po = PurchaseOrder::query()->create([
                     'restaurant_id' => $restaurantId,
-                    'inventory_item_id' => $lockedItem->id,
-                    'type' => 'PURCHASE',
-                    'quantity_delta' => number_format($newQty, 3, '.', ''),
-                    'stock_after' => number_format($newStock, 3, '.', ''),
-                    'unit_cost' => number_format($purchaseCost, 2, '.', ''),
-                    'reference_type' => PurchaseOrder::class,
-                    'reference_id' => $po->id,
-                    'reason' => "Purchase {$po->po_number}".($po->reference_number ? " ({$po->reference_number})" : ''),
-                    'actor_id' => $user->id,
-                    'occurred_at' => now(),
+                    'supplier_id' => $validated['supplier_id'] ?? null,
+                    'po_number' => $poNumber,
+                    'reference_number' => isset($validated['reference_number']) ? trim($validated['reference_number']) : null,
+                    'status' => 'RECEIVED',
+                    'subtotal' => number_format($subtotal, 2, '.', ''),
+                    'tax_amount' => number_format($taxAmount, 2, '.', ''),
+                    'total' => number_format($total, 2, '.', ''),
+                    'notes' => isset($validated['notes']) ? trim($validated['notes']) : null,
+                    'received_by' => $user->id,
+                    'received_at' => now(),
                 ]);
+
+                foreach ($preparedLines as $line) {
+                    /** @var InventoryItem $lockedItem */
+                    $lockedItem = InventoryItem::query()
+                        ->whereKey($line['inventory_item_id'])
+                        ->lockForUpdate()
+                        ->firstOrFail();
+
+                    $oldStock = max(0.0, (float) $lockedItem->current_stock);
+                    $oldCost = (float) $lockedItem->unit_cost;
+                    $newQty = $line['quantity'];
+                    $purchaseCost = $line['unit_cost'];
+
+                    $weightedCost = $purchaseCost === null
+                        ? $oldCost
+                        : round((($oldStock * $oldCost) + ($newQty * $purchaseCost)) / ($oldStock + $newQty), 2);
+
+                    $newStock = round((float) $lockedItem->current_stock + $newQty, 3);
+
+                    $lockedItem->update([
+                        'current_stock' => number_format($newStock, 3, '.', ''),
+                        'unit_cost' => number_format($weightedCost, 2, '.', ''),
+                    ]);
+
+                    PurchaseOrderItem::query()->create([
+                        'purchase_order_id' => $po->id,
+                        'inventory_item_id' => $lockedItem->id,
+                        'quantity' => number_format($newQty, 3, '.', ''),
+                        'unit_cost' => number_format($purchaseCost ?? 0, 2, '.', ''),
+                        'line_total' => number_format($line['line_total'], 2, '.', ''),
+                    ]);
+
+                    StockMovement::query()->create([
+                        'restaurant_id' => $restaurantId,
+                        'inventory_item_id' => $lockedItem->id,
+                        'type' => 'PURCHASE',
+                        'quantity_delta' => number_format($newQty, 3, '.', ''),
+                        'stock_after' => number_format($newStock, 3, '.', ''),
+                        'unit_cost' => $purchaseCost === null ? null : number_format($purchaseCost, 2, '.', ''),
+                        'reference_type' => PurchaseOrder::class,
+                        'reference_id' => $po->id,
+                        'reason' => "Purchase {$po->po_number}".($po->reference_number ? " ({$po->reference_number})" : ''),
+                        'actor_id' => $user->id,
+                        'occurred_at' => now(),
+                    ]);
+                }
+
+                Audit::record($request, 'purchase_order.received', $po, after: [
+                    'po_number' => $po->po_number,
+                    'total' => $po->total,
+                    'items_count' => count($preparedLines),
+                ]);
+                if (isset($validated['bill'])) {
+                    $billPath = $this->purchaseBillPath($po);
+                    $this->savePurchaseBill($request, $po, $validated['bill']);
+                }
+
+                return response()->json([
+                    'data' => $po->load(['supplier:id,name', 'receiver:id,name', 'items.inventoryItem:id,sku,name,unit']),
+                ], 201);
+            });
+        } catch (\Throwable $exception) {
+            if ($billPath !== null) {
+                Storage::disk('local')->delete($billPath);
             }
+            throw $exception;
+        }
+    }
 
-            Audit::record($request, 'purchase_order.received', $po, after: [
-                'po_number' => $po->po_number,
-                'total' => $po->total,
-                'items_count' => count($preparedLines),
-            ]);
+    private function resolveReceivedItem(int $restaurantId, array $line): InventoryItem
+    {
+        $name = trim($line['name']);
+        $normalizedName = Str::lower($name);
+        $existing = InventoryItem::query()
+            ->where('restaurant_id', $restaurantId)
+            ->where('unit', $line['unit'])
+            ->where('active', true)
+            ->whereRaw('LOWER(name) = ?', [$normalizedName])
+            ->orderBy('id')
+            ->first();
 
-            return response()->json([
-                'data' => $po->load(['supplier:id,name', 'receiver:id,name', 'items.inventoryItem:id,sku,name,unit']),
-            ], 201);
-        });
+        return $existing ?? InventoryItem::query()->firstOrCreate([
+            'restaurant_id' => $restaurantId,
+            'sku' => 'RECV-'.substr(hash('sha256', $normalizedName."\0".$line['unit']), 0, 35),
+        ], [
+            'name' => $name,
+            'category' => $line['category'],
+            'unit' => $line['unit'],
+            'current_stock' => 0,
+            'reorder_level' => 0,
+            'unit_cost' => 0,
+            'auto_eighty_six' => false,
+            'active' => true,
+        ]);
     }
 
     public function uploadPurchaseBill(Request $request, PurchaseOrder $purchaseOrder): JsonResponse
     {
         $user = $request->user();
         abort_unless($purchaseOrder->restaurant_id === $user->restaurant_id, 404);
-        abort_unless($user->roles()->whereIn('key', ['supervisor', 'admin'])->exists(), 403);
+        $this->authorizeBillUpload($request);
 
         $validated = $request->validate([
             'bill' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
         ]);
 
+        $this->savePurchaseBill($request, $purchaseOrder, $validated['bill']);
+
+        return response()->json(['message' => 'Bill copy uploaded.']);
+    }
+
+    private function authorizeBillUpload(Request $request): void
+    {
+        abort_unless($request->user()->roles()->whereIn('key', ['supervisor', 'admin'])->exists(), 403);
+    }
+
+    private function savePurchaseBill(Request $request, PurchaseOrder $purchaseOrder, UploadedFile $file): void
+    {
         $path = $this->purchaseBillPath($purchaseOrder);
-        $saved = Storage::disk('local')->putFileAs(dirname($path), $validated['bill'], basename($path));
+        $saved = Storage::disk('local')->putFileAs(dirname($path), $file, basename($path));
         abort_if($saved === false, 500, 'Could not save the bill copy.');
 
         Audit::record($request, 'purchase_order.bill_uploaded', $purchaseOrder);
-
-        return response()->json(['message' => 'Bill copy uploaded.']);
     }
 
     public function showPurchaseBill(Request $request, PurchaseOrder $purchaseOrder): StreamedResponse

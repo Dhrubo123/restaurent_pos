@@ -19,6 +19,33 @@ class InventoryAndStaffTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_supervisor_records_new_products_and_drinks_with_a_slip_in_one_entry(): void
+    {
+        Storage::fake('local');
+        [, $supervisor, $admin] = $this->setupFixtures();
+        $supervisor->roles()->attach(Role::query()->firstOrCreate(['key' => 'supervisor'], ['name' => 'Supervisor']));
+        $slip = '%PDF-1.4 supplier slip';
+        $items = [
+            ['name' => 'Onions', 'quantity' => 5, 'unit' => 'kg', 'category' => 'Products'],
+            ['name' => 'Cola', 'quantity' => 12, 'unit' => 'btl', 'category' => 'Drinks'],
+        ];
+
+        $purchase = $this->actingAs($supervisor)->post('/api/v1/inventory/purchases', [
+            'items' => $items,
+            'bill' => UploadedFile::fake()->createWithContent('slip.pdf', $slip),
+        ])->assertCreated()->json('data');
+        $this->assertDatabaseHas('inventory_items', ['name' => 'Onions', 'current_stock' => 5]);
+        $this->assertDatabaseHas('inventory_items', ['name' => 'Cola', 'current_stock' => 12, 'category' => 'Drinks']);
+
+        $this->actingAs($admin)->getJson('/api/v1/inventory?received_date=today')->assertOk()
+            ->assertJsonPath('data.received_date', now('Asia/Dhaka')->toDateString())
+            ->assertJsonPath('data.purchase_orders.0.receiver.name', $supervisor->name)
+            ->assertJsonPath('data.purchase_orders.0.has_bill_copy', true)
+            ->assertJsonCount(2, 'data.purchase_orders.0.items');
+        $this->get("/api/v1/inventory/purchases/{$purchase['id']}/bill")
+            ->assertOk()->assertStreamedContent($slip);
+    }
+
     public function test_supervisor_can_upload_a_purchase_bill_and_only_own_restaurant_admin_can_view_it(): void
     {
         Storage::fake('local');
@@ -151,50 +178,50 @@ class InventoryAndStaffTest extends TestCase
         $this->assertFalse($burger->fresh()->available);
     }
 
-    public function test_staff_management_enforces_role_hierarchy_and_prevents_self_deactivation(): void
+    public function test_only_admin_can_access_staff_management_and_cannot_deactivate_self(): void
     {
         [, $manager, $admin] = $this->setupFixtures();
 
-        // Manager creates a new Waiter
-        $createdWaiter = $this->actingAs($manager)->postJson('/api/v1/staff', [
+        $supervisor = User::factory()->create(['restaurant_id' => $admin->restaurant_id, 'active' => true]);
+        $supervisor->roles()->attach(Role::query()->firstOrCreate(['key' => 'supervisor'], ['name' => 'Supervisor']));
+
+        $staffPayload = [
             'name' => 'Rafiul Islam',
             'email' => 'rafiul@restaurant.test',
             'password' => 'StrongPass#2026',
             'role_key' => 'waiter',
-        ])->assertCreated()->json('data');
+        ];
+        foreach ([$manager, $supervisor] as $nonAdmin) {
+            $this->actingAs($nonAdmin)->postJson('/api/v1/staff', $staffPayload)->assertForbidden();
+        }
+        $this->assertDatabaseMissing('users', ['email' => $staffPayload['email']]);
+
+        $createdWaiter = $this->actingAs($admin)->postJson('/api/v1/staff', $staffPayload)->assertCreated()->json('data');
 
         $this->assertSame('rafiul@restaurant.test', $createdWaiter['email']);
         $this->assertSame('waiter', $createdWaiter['roles'][0]['key']);
 
-        // Manager cannot escalate a user to Admin
-        $this->actingAs($manager)->postJson('/api/v1/staff', [
-            'name' => 'Fake Admin',
-            'email' => 'fakeadmin@restaurant.test',
-            'password' => 'StrongPass#2026',
-            'role_key' => 'admin',
-        ])->assertForbidden();
+        $staffUrl = "/api/v1/staff/{$createdWaiter['id']}";
+        $passwordReset = ['password' => 'NewWaiterPass#2026', 'reason' => 'Staff forgot shift password'];
+        foreach ([$manager, $supervisor] as $nonAdmin) {
+            $this->actingAs($nonAdmin)->getJson('/api/v1/staff')->assertForbidden();
+            $this->patchJson($staffUrl, ['name' => 'Unauthorized update'])->assertForbidden();
+            $this->postJson("{$staffUrl}/reset-password", $passwordReset)->assertForbidden();
+            $this->postJson("{$staffUrl}/activation")->assertForbidden();
+            $this->deleteJson("{$staffUrl}/activation")->assertForbidden();
+        }
 
-        // Manager cannot reset Admin's password
-        $this->actingAs($manager)->postJson("/api/v1/staff/{$admin->id}/reset-password", [
-            'password' => 'AnotherPass#2026',
-            'reason' => 'Unauthorized attempt',
-        ])->assertForbidden();
+        $this->actingAs($admin)->getJson('/api/v1/staff')->assertOk();
+        $this->patchJson($staffUrl, ['name' => 'Updated Waiter'])->assertOk();
+        $this->postJson("{$staffUrl}/reset-password", $passwordReset)->assertOk();
 
-        // Manager can reset Waiter's password and deactivate them
-        $this->actingAs($manager)->postJson("/api/v1/staff/{$createdWaiter['id']}/reset-password", [
-            'password' => 'NewWaiterPass#2026',
-            'reason' => 'Staff forgot shift password',
-        ])->assertOk();
-
-        $deactivated = $this->actingAs($manager)
-            ->deleteJson("/api/v1/staff/{$createdWaiter['id']}/activation")
+        $deactivated = $this->deleteJson("{$staffUrl}/activation")
             ->assertOk()
             ->json('data');
         $this->assertFalse($deactivated['active']);
+        $this->postJson("{$staffUrl}/activation")->assertOk()->assertJsonPath('data.active', true);
 
-        // Manager cannot deactivate their own account
-        $this->actingAs($manager)
-            ->deleteJson("/api/v1/staff/{$manager->id}/activation")
+        $this->deleteJson("/api/v1/staff/{$admin->id}/activation")
             ->assertConflict();
     }
 

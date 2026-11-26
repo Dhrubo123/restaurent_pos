@@ -16,7 +16,7 @@ import type { InvoiceRecord } from './InvoicePrintModal.tsx'
 import ReportsWorkspace from './ReportsWorkspace.tsx'
 import type { AuditEventRecord, ReportSummaryData } from './ReportsWorkspace.tsx'
 import InventoryWorkspace from './InventoryWorkspace.tsx'
-import type { InventoryData } from './InventoryWorkspace.tsx'
+import type { DailyReceivingLine, InventoryData } from './InventoryWorkspace.tsx'
 import StaffWorkspace from './StaffWorkspace.tsx'
 import type { StaffRecord, StaffRoleOption } from './StaffWorkspace.tsx'
 import OwnerWorkspace from './OwnerWorkspace.tsx'
@@ -118,7 +118,7 @@ export default function FoundationApp() {
   const [reportData, setReportData] = useState<ReportSummaryData | null>(null)
   const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([])
   const [inventoryData, setInventoryData] = useState<InventoryData | null>(null)
-  const [purchaseDate, setPurchaseDate] = useState('')
+  const [purchaseDate, setPurchaseDate] = useState('today')
   const [staffList, setStaffList] = useState<StaffRecord[]>([])
   const [staffRoleOptions, setStaffRoleOptions] = useState<StaffRoleOption[]>([])
   const [ownerData, setOwnerData] = useState<OwnerSummaryData | null>(null)
@@ -151,7 +151,7 @@ export default function FoundationApp() {
   const canTakePayment = user?.permissions.includes('take-payment') ?? false
   const canManageMenu = user?.permissions.includes('manage-menu') ?? false
   const canManageInventory = canManageMenu || canManageFloor
-  const canManageStaff = (user?.permissions.includes('manage-users') ?? false) || canManageFloor || canManageMenu
+  const canManageStaff = user?.roles.includes('admin') ?? false
   const canViewReports = (user?.permissions.includes('view-reports') ?? false) || canManageFloor || canManageMenu
   const canRefundOrVoid = (user?.permissions.includes('refund-payment') ?? false) || canManageFloor || canManageMenu
   const canViewKots = user
@@ -327,7 +327,6 @@ export default function FoundationApp() {
     const manageOrders = currentUser.permissions.includes('manage-orders')
     const takePayment = currentUser.permissions.includes('take-payment')
     const manageMenu = currentUser.permissions.includes('manage-menu')
-    const manageUsers = currentUser.permissions.includes('manage-users')
     const viewReports = currentUser.permissions.includes('view-reports') || manageFloor || manageMenu
 
     const tasks: Promise<unknown>[] = [loadMenu(manageMenu)]
@@ -337,7 +336,7 @@ export default function FoundationApp() {
     if (viewReports) tasks.push(loadReports(), loadAuditEvents())
     if (manageMenu || manageFloor) tasks.push(loadInventory())
     if (manageOrders || manageFloor || manageMenu) tasks.push(loadOwnerMeals())
-    if (manageUsers || manageFloor || manageMenu) tasks.push(loadStaff())
+    if (currentUser.roles.includes('admin')) tasks.push(loadStaff())
 
     const hasKots = ['manage-orders', 'manage-kitchen', 'manage-bar', 'manage-floor', 'manage-menu', 'view-floor'].some(
       (p) => currentUser.permissions.includes(p),
@@ -1489,29 +1488,31 @@ export default function FoundationApp() {
     }
   }
 
-  const recordPurchaseOrder = async (payload: {
-    supplier_id?: number | null
-    reference_number?: string
-    tax_amount?: number
-    notes?: string
-    items: { inventory_item_id: number; quantity: number; unit_cost: number }[]
-  }): Promise<boolean> => {
+  const recordPurchaseOrder = async (lines: DailyReceivingLine[], supplierId: string, bill: File | null): Promise<boolean> => {
     resetMessages()
     setBusy(true)
+    let purchaseNumber: string
     try {
+      const body = new FormData()
+      if (supplierId) body.append('supplier_id', supplierId)
+      if (bill) body.append('bill', bill)
+      lines.forEach((line, index) => {
+        Object.entries(line).forEach(([key, value]) => body.append(`items[${index}][${key}]`, value.trim()))
+      })
       const result = await request<{ data: { po_number: string } }>('/inventory/purchases', csrfToken, {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body,
       })
-      setSuccess(`Purchase ${result.data.po_number} received into stock.`)
-      await loadInventory()
-      return true
+      purchaseNumber = result.data.po_number
     } catch (caught) {
       handleFailure(caught)
       return false
     } finally {
       setBusy(false)
     }
+    await filterPurchaseDate('today')
+    setSuccess(`Purchase ${purchaseNumber} received into stock.`)
+    return true
   }
 
   const uploadPurchaseBill = async (purchaseId: number, file: File) => {
@@ -1848,22 +1849,22 @@ export default function FoundationApp() {
     <section className="login-panel"><form className="login-card" onSubmit={login}><p className="eyebrow coral">CLIQUE CAFÉ · POS</p><h2>Sign in to your shift</h2><p className="muted">Use your Owner/Admin or Staff account credentials.</p>{error && <Alert message={error} />}{success && <Success message={success} />}<label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required /><FieldError errors={fieldErrors.email} /></label><label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /><FieldError errors={fieldErrors.password} /></label><button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button><p className="demo-note">Clique Café POS · Powered by Clique IT</p></form></section>
   </main>
 
-  return <div className="dashboard-shell">
-    {isLocked && (
+  if (isLocked) {
+    return (
       <div className="session-lock-backdrop" role="dialog" aria-modal="true" aria-labelledby="session-lock-title">
         <form className="session-lock-card" onSubmit={unlockPos}>
           <img src="/clique-cafe-logo.jpg" alt="" className="session-lock-logo" />
           <p className="eyebrow coral">SECURE POS LOCK</p>
           <h2 id="session-lock-title">Welcome back, {user.name}</h2>
-          <p className="muted">This screen locked after 5 minutes without activity. Enter your password to continue the same shift.</p>
+          <p className="muted">The POS locked after 5 minutes without activity. A Supervisor can unlock this shift.</p>
           <label>
-            Password
+            Supervisor password
             <input
               autoFocus
               type="password"
               value={unlockPassword}
               onChange={(event) => setUnlockPassword(event.target.value)}
-              autoComplete="current-password"
+              autoComplete="off"
               required
             />
           </label>
@@ -1876,7 +1877,10 @@ export default function FoundationApp() {
           </button>
         </form>
       </div>
-    )}
+    )
+  }
+
+  return <div className="dashboard-shell">
     <aside className="sidebar">
       <div className="logo-row">
         <img src="/clique-cafe-logo.jpg" alt="Clique Café" className="brand-logo-sidebar" />
@@ -1910,9 +1914,9 @@ export default function FoundationApp() {
         <button className={activeTab === 'reports' ? 'active' : ''} disabled={!canViewReports} onClick={() => { resetMessages(); setActiveTab('reports'); void Promise.all([loadReports(reportData?.range.from, reportData?.range.to), loadAuditEvents()]) }}>
           <span>◒</span> Reports
         </button>
-        <button className={activeTab === 'staff' ? 'active' : ''} disabled={!canManageStaff} onClick={() => { resetMessages(); setActiveTab('staff'); void loadStaff() }}>
+        {canManageStaff && <button className={activeTab === 'staff' ? 'active' : ''} onClick={() => { resetMessages(); setActiveTab('staff'); void loadStaff() }}>
           <span>👥</span> Staff
-        </button>
+        </button>}
         <button className="tablet-signout" aria-label="Sign out" disabled={busy} onClick={logout}><span>↪</span> Sign out</button>
       </nav>
       <div className="sidebar-user"><div className="avatar">{user.name.charAt(0)}</div><div><strong>{user.name}</strong><span>{user.roles.join(', ')}</span></div><button aria-label="Sign out" disabled={busy} onClick={logout}>↪</button></div>
@@ -1967,7 +1971,7 @@ export default function FoundationApp() {
           onSubmitOwnerMeal={submitOwnerMeal}
           onPrintKots={(kotsToPrint) => setPrintKots(kotsToPrint)}
         />
-      ) : activeTab === 'staff' ? (
+      ) : activeTab === 'staff' && canManageStaff ? (
         <StaffWorkspace
           restaurantName={user.restaurant.name}
           staffList={staffList}

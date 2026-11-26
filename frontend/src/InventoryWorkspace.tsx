@@ -91,6 +91,7 @@ export type StockMovementRecord = {
 }
 
 export type InventoryData = {
+  received_date?: string | null
   summary: {
     total_items: number
     low_stock_count: number
@@ -103,6 +104,15 @@ export type InventoryData = {
   recipes: RecipeIngredientRecord[]
   movements: StockMovementRecord[]
 }
+
+export type DailyReceivingLine = {
+  name: string
+  category: 'Products' | 'Drinks'
+  unit: InventoryItemRecord['unit']
+  quantity: string
+}
+
+const newReceivingLine: DailyReceivingLine = { name: '', category: 'Products', unit: 'pcs', quantity: '' }
 
 type Props = {
   restaurantName: string
@@ -120,13 +130,7 @@ type Props = {
   onSaveSupplier: (payload: Record<string, unknown>) => Promise<boolean>
   onUploadBill?: (id: number, file: File) => Promise<void>
   billUrl?: (id: number) => string
-  onRecordPurchase: (payload: {
-    supplier_id?: number | null
-    reference_number?: string
-    tax_amount?: number
-    notes?: string
-    items: { inventory_item_id: number; quantity: number; unit_cost: number }[]
-  }) => Promise<boolean>
+  onRecordPurchase: (lines: DailyReceivingLine[], supplierId: string, bill: File | null) => Promise<boolean>
   onSyncRecipe: (
     menuItemId: number,
     ingredients: { inventory_item_id: number; quantity: number }[],
@@ -149,7 +153,7 @@ export default function InventoryWorkspace({
   billUrl,
   onSyncRecipe,
 }: Props) {
-  const [subTab, setSubTab] = useState<'items' | 'purchasing' | 'recipes' | 'movements'>('items')
+  const [subTab, setSubTab] = useState<'items' | 'purchasing' | 'recipes' | 'movements'>('purchasing')
   const [itemSearch, setItemSearch] = useState('')
   const [stockFilter, setStockFilter] = useState<'all' | 'alerts'>('all')
 
@@ -181,10 +185,8 @@ export default function InventoryWorkspace({
 
   const [purchaseModal, setPurchaseModal] = useState<{
     supplierId: string
-    referenceNumber: string
-    taxAmount: string
-    notes: string
-    lines: { inventory_item_id: string; quantity: string; unit_cost: string }[]
+    lines: DailyReceivingLine[]
+    bill: File | null
   } | null>(null)
 
   const [recipeModal, setRecipeModal] = useState<{
@@ -257,23 +259,20 @@ export default function InventoryWorkspace({
   const submitPurchase = async (event: FormEvent) => {
     event.preventDefault()
     if (!purchaseModal) return
-    const validLines = purchaseModal.lines
-      .filter((l) => l.inventory_item_id && Number(l.quantity) > 0)
-      .map((l) => ({
-        inventory_item_id: Number(l.inventory_item_id),
-        quantity: Number(l.quantity),
-        unit_cost: Number(l.unit_cost || 0),
-      }))
-    if (validLines.length === 0) return
-
-    const ok = await onRecordPurchase({
-      supplier_id: purchaseModal.supplierId ? Number(purchaseModal.supplierId) : null,
-      reference_number: purchaseModal.referenceNumber.trim() || undefined,
-      tax_amount: Number(purchaseModal.taxAmount || 0),
-      notes: purchaseModal.notes.trim() || undefined,
-      items: validLines,
-    })
+    const ok = await onRecordPurchase(purchaseModal.lines, purchaseModal.supplierId, purchaseModal.bill)
     if (ok) setPurchaseModal(null)
+  }
+
+  const openReceivingForm = () => {
+    setPurchaseModal({ supplierId: '', lines: [newReceivingLine], bill: null })
+  }
+
+  const updateReceivingLine = (index: number, changes: Partial<DailyReceivingLine>) => {
+    if (!purchaseModal) return
+    setPurchaseModal({
+      ...purchaseModal,
+      lines: purchaseModal.lines.map((line, lineIndex) => lineIndex === index ? { ...line, ...changes } : line),
+    })
   }
 
   const submitRecipe = async (event: FormEvent) => {
@@ -293,34 +292,17 @@ export default function InventoryWorkspace({
     <div className="reports-workspace">
       <header>
         <div>
-          <p className="eyebrow coral">INVENTORY, PURCHASING & RECIPE BOM</p>
-          <h1>Track every ingredient from purchase to plate.</h1>
-          <p className="muted">
-            {restaurantName} · Live stock ledger, supplier GRN purchases & automatic KOT recipe deduction
-          </p>
+          <h1>Inventory</h1>
+          <p className="muted">{restaurantName}</p>
         </div>
         <div className="header-actions">
           <button
             type="button"
             className="secondary compact"
-            disabled={busy || items.length === 0}
-            onClick={() =>
-              setPurchaseModal({
-                supplierId: String(suppliers[0]?.id ?? ''),
-                referenceNumber: '',
-                taxAmount: '0',
-                notes: '',
-                lines: [
-                  {
-                    inventory_item_id: String(items[0]?.id ?? ''),
-                    quantity: '10',
-                    unit_cost: String(items[0]?.unit_cost ?? '100'),
-                  },
-                ],
-              })
-            }
+            disabled={busy}
+            onClick={openReceivingForm}
           >
-            🛒 ＋ Record Purchase (Stock-In)
+            ＋ Record stock received
           </button>
           <button
             type="button"
@@ -541,38 +523,24 @@ export default function InventoryWorkspace({
         <div className="reports-two-col">
           <section className="zone-section">
             <div className="zone-title">
-              <h2>Purchase Orders / Goods Received (GRN)</h2>
+              <h2>Daily Stock Received</h2>
               <button
                 type="button"
                 className="primary compact"
-                disabled={busy || items.length === 0}
-                onClick={() =>
-                  setPurchaseModal({
-                    supplierId: String(suppliers[0]?.id ?? ''),
-                    referenceNumber: '',
-                    taxAmount: '0',
-                    notes: '',
-                    lines: [
-                      {
-                        inventory_item_id: String(items[0]?.id ?? ''),
-                        quantity: '10',
-                        unit_cost: String(items[0]?.unit_cost ?? '100'),
-                      },
-                    ],
-                  })
-                }
+                disabled={busy}
+                onClick={openReceivingForm}
               >
-                ＋ New Purchase Bill
+                ＋ Record stock received
               </button>
             </div>
             <div className="field-row">
               <label>
                 Received date
-                <input type="date" value={purchaseDate} disabled={busy}
+                <input type="date" value={inventory?.received_date ?? ''} disabled={busy}
                   onChange={(event) => void onPurchaseDateChange(event.currentTarget.value)} />
               </label>
-              {purchaseDate && <button type="button" className="secondary compact" disabled={busy}
-                onClick={() => void onPurchaseDateChange('')}>Show recent purchases</button>}
+              <button type="button" className="secondary compact" disabled={busy || purchaseDate === 'today'}
+                onClick={() => void onPurchaseDateChange('today')}>Today</button>
             </div>
             {purchaseOrders.length === 0 ? (
               <div className="inline-empty">No purchase bills recorded yet.</div>
@@ -586,6 +554,7 @@ export default function InventoryWorkspace({
                       <th>Items Received</th>
                       <th>Total Cost</th>
                       <th>Date</th>
+                      <th>Entered By</th>
                       <th>Bill Copy</th>
                     </tr>
                   </thead>
@@ -602,13 +571,13 @@ export default function InventoryWorkspace({
                         <td>
                           {po.items.map((l) => (
                             <div key={l.id}>
-                              +{Number(l.quantity)} {l.inventory_item?.unit} {l.inventory_item?.name} @ ৳
-                              {Number(l.unit_cost).toFixed(0)}
+                              {l.inventory_item?.name} · {Number(l.quantity)} {l.inventory_item?.unit}
+                              {Number(l.unit_cost) > 0 && ` @ ৳${Number(l.unit_cost).toFixed(2)}`}
                             </div>
                           ))}
                         </td>
                         <td>
-                          <strong>৳{Number(po.total).toFixed(2)}</strong>
+                          <strong>{Number(po.total) > 0 ? `৳${Number(po.total).toFixed(2)}` : '—'}</strong>
                         </td>
                         <td>
                           {new Date(po.received_at).toLocaleString([], {
@@ -618,6 +587,7 @@ export default function InventoryWorkspace({
                             minute: '2-digit',
                           })}
                         </td>
+                        <td>{po.receiver?.name ?? '—'}</td>
                         <td>
                           {po.has_bill_copy && billUrl ? (
                             <a href={billUrl(po.id)} target="_blank" rel="noopener noreferrer">View bill</a>
@@ -1102,144 +1072,81 @@ export default function InventoryWorkspace({
       )}
 
       {purchaseModal && (
-        <div className="modal-backdrop" onMouseDown={() => setPurchaseModal(null)}>
-          <form
-            className="modal zone-modal"
-            onSubmit={submitPurchase}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
+        <div className="modal-backdrop" onMouseDown={() => !busy && setPurchaseModal(null)}>
+          <form className="modal zone-modal" onSubmit={submitPurchase} onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <div>
-                <p className="eyebrow coral">PURCHASING / GOODS RECEIVED (GRN)</p>
-                <h2>Record supplier / market purchase</h2>
-              </div>
-              <button type="button" className="icon-button" onClick={() => setPurchaseModal(null)}>
-                ×
-              </button>
+              <h2>Record stock received</h2>
+              <button type="button" className="icon-button" disabled={busy} onClick={() => setPurchaseModal(null)}>×</button>
             </div>
-
-            <div className="field-row">
-              <label>
-                Supplier (or Local Cash Bazaar)
-                <select
-                  value={purchaseModal.supplierId}
-                  onChange={(e) =>
-                    setPurchaseModal({ ...purchaseModal, supplierId: e.target.value })
-                  }
-                >
-                  <option value="">Local Market Cash Purchase</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Vendor Invoice / Bill Ref #
-                <input
-                  placeholder="e.g. BILL-2026-88"
-                  value={purchaseModal.referenceNumber}
-                  onChange={(e) =>
-                    setPurchaseModal({ ...purchaseModal, referenceNumber: e.target.value })
-                  }
-                />
-              </label>
-            </div>
-
-            <div className="modifier-picker">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="picker-label">Purchased Items (Stock-In)</span>
-                <button
-                  type="button"
-                  className="inline-link-btn"
-                  onClick={() =>
-                    setPurchaseModal({
-                      ...purchaseModal,
-                      lines: [
-                        ...purchaseModal.lines,
-                        {
-                          inventory_item_id: String(items[0]?.id ?? ''),
-                          quantity: '1',
-                          unit_cost: String(items[0]?.unit_cost ?? '0'),
-                        },
-                      ],
-                    })
-                  }
-                >
-                  ＋ Add another line
-                </button>
-              </div>
-
-              {purchaseModal.lines.map((line, idx) => (
-                <div className="field-row" key={idx} style={{ alignItems: 'end' }}>
+            <label>
+              Supplier
+              <select value={purchaseModal.supplierId} disabled={busy}
+                onChange={(event) => setPurchaseModal({ ...purchaseModal, supplierId: event.currentTarget.value })}>
+                <option value="">Local market</option>
+                {suppliers.filter((supplier) => supplier.active).map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                ))}
+              </select>
+            </label>
+            <datalist id="received-item-names">
+              {items.filter((item) => item.active).map((item) => <option key={item.id} value={item.name} />)}
+            </datalist>
+            {purchaseModal.lines.map((line, index) => (
+              <fieldset key={index} disabled={busy}>
+                <legend>Item {index + 1}</legend>
+                <label>
+                  Item name
+                  <input required maxLength={120} list="received-item-names" value={line.name}
+                    onChange={(event) => {
+                      const name = event.currentTarget.value
+                      const existing = items.find((item) => item.active && item.name.toLowerCase() === name.toLowerCase())
+                      updateReceivingLine(index, existing ? { name, unit: existing.unit } : { name })
+                    }} />
+                </label>
+                <div className="field-row">
                   <label>
-                    Stock Item
-                    <select
-                      value={line.inventory_item_id}
-                      onChange={(e) => {
-                        const matched = items.find((i) => String(i.id) === e.target.value)
-                        const next = [...purchaseModal.lines]
-                        next[idx] = {
-                          ...line,
-                          inventory_item_id: e.target.value,
-                          unit_cost: matched ? String(matched.unit_cost) : line.unit_cost,
-                        }
-                        setPurchaseModal({ ...purchaseModal, lines: next })
-                      }}
-                    >
-                      {items.map((i) => (
-                        <option key={i.id} value={i.id}>
-                          {i.name} ({i.unit})
-                        </option>
-                      ))}
+                    Type
+                    <select value={line.category} onChange={(event) =>
+                      updateReceivingLine(index, { category: event.currentTarget.value === 'Drinks' ? 'Drinks' : 'Products' })}>
+                      <option>Products</option>
+                      <option>Drinks</option>
                     </select>
                   </label>
                   <label>
-                    Qty Received
-                    <input
-                      required
-                      type="number"
-                      min="0.001"
-                      step="0.001"
-                      value={line.quantity}
-                      onChange={(e) => {
-                        const next = [...purchaseModal.lines]
-                        next[idx] = { ...line, quantity: e.target.value }
-                        setPurchaseModal({ ...purchaseModal, lines: next })
-                      }}
-                    />
+                    Quantity received
+                    <input required type="number" min="0.001" step="0.001" max="9999999.999" value={line.quantity}
+                      onChange={(event) => updateReceivingLine(index, { quantity: event.currentTarget.value })} />
                   </label>
                   <label>
-                    Purchase Unit Cost (৳)
-                    <input
-                      required
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={line.unit_cost}
-                      onChange={(e) => {
-                        const next = [...purchaseModal.lines]
-                        next[idx] = { ...line, unit_cost: e.target.value }
-                        setPurchaseModal({ ...purchaseModal, lines: next })
-                      }}
-                    />
+                    Unit
+                    <select value={line.unit} onChange={(event) =>
+                      updateReceivingLine(index, { unit: event.currentTarget.value as DailyReceivingLine['unit'] })}>
+                      {['pcs', 'kg', 'g', 'l', 'ml', 'btl', 'can', 'pack'].map((unit) => <option key={unit}>{unit}</option>)}
+                    </select>
                   </label>
                 </div>
-              ))}
-            </div>
-
+                {purchaseModal.lines.length > 1 && (
+                  <button type="button" className="inline-link-btn" onClick={() =>
+                    setPurchaseModal({ ...purchaseModal, lines: purchaseModal.lines.filter((_, lineIndex) => lineIndex !== index) })}>
+                    Remove item
+                  </button>
+                )}
+              </fieldset>
+            ))}
+            <button type="button" className="secondary compact" disabled={busy} onClick={() =>
+              setPurchaseModal({ ...purchaseModal, lines: [...purchaseModal.lines, newReceivingLine] })}>
+              Add another item
+            </button>
+            {onUploadBill && (
+              <label>
+                Supplier slip (JPG, PNG or PDF)
+                <input type="file" accept="image/jpeg,image/png,application/pdf" required disabled={busy}
+                  onChange={(event) => setPurchaseModal({ ...purchaseModal, bill: event.currentTarget.files?.[0] ?? null })} />
+              </label>
+            )}
             <div className="modal-actions">
-              <button type="button" className="secondary" onClick={() => setPurchaseModal(null)}>
-                Cancel
-              </button>
-              <button type="submit" className="primary" disabled={busy}>
-                {busy
-                  ? 'Receiving stock…'
-                  : `Receive Stock · ৳${purchaseModal.lines
-                      .reduce((s, l) => s + Number(l.quantity || 0) * Number(l.unit_cost || 0), 0)
-                      .toFixed(2)}`}
-              </button>
+              <button type="button" className="secondary" disabled={busy} onClick={() => setPurchaseModal(null)}>Cancel</button>
+              <button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save stock entry'}</button>
             </div>
           </form>
         </div>

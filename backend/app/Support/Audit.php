@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\AuditEvent;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 
@@ -15,12 +16,13 @@ final class Audit
         ?array $before = null,
         ?array $after = null,
         ?string $reason = null,
+        ?User $actor = null,
     ): void {
         $user = $request->user();
 
         AuditEvent::query()->create([
             'restaurant_id' => $user?->restaurant_id,
-            'actor_id' => $user?->id,
+            'actor_id' => $actor?->id ?? $user?->id,
             'action' => $action,
             'auditable_type' => $subject::class,
             'auditable_id' => $subject->getKey(),

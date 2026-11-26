@@ -636,7 +636,7 @@ export default function OwnerWorkspace({
           </div>
 
           <div className="zone-title" style={{ marginTop: '28px' }}>
-            <h2>Recent Owner Meals (KOT & Budget Log)</h2>
+            <h2>Recent Owner Meals</h2>
             <span>Tap any KOT ticket to reprint 80mm slip</span>
           </div>
 
@@ -648,17 +648,26 @@ export default function OwnerWorkspace({
                 <div className="zone-row" key={meal.id}>
                   <div>
                     <strong>
-                      {meal.order_number} · Budget Value: ৳{Number(meal.total).toFixed(2)} (Paid: ৳0.00 — Owner Meal)
+                      {meal.order_number} · Food value: ৳{Number(meal.total).toFixed(2)}
                     </strong>
                     <span>
-                      {meal.items.map((i) => `${Number(i.quantity)}x ${i.item_name}`).join(', ')} ·{' '}
                       {new Date(meal.opened_at).toLocaleString([], {
                         month: 'short',
                         day: 'numeric',
                         hour: '2-digit',
                         minute: '2-digit',
                       })}
+                      {' · Excluded from sales'}
                     </span>
+                    <ul>
+                      {meal.items.map((item) => (
+                        <li key={item.id}>
+                          {Number(item.quantity)} × {item.item_name}
+                          {item.variant_name && ` (${item.variant_name})`}
+                          {' · '}৳{Number(item.line_total).toFixed(2)}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     {meal.kots.length > 0 && (
