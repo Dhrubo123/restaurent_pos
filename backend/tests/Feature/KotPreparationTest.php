@@ -191,12 +191,17 @@ class KotPreparationTest extends TestCase
         $this->assertSame('120.00', $afterCancel['subtotal']);
         $this->assertSame('CANCELLED', $afterCancel['kots'][1]['status'] === 'CANCELLED' ? $afterCancel['kots'][1]['status'] : $afterCancel['kots'][0]['status']);
 
-        $cancelledKotItem = collect($this->actingAs($manager)->getJson('/api/v1/kots?include_completed=1')->assertOk()->json('data'))
+        $this->assertArrayNotHasKey('cancel_reason', $afterCancel['items'][0]);
+        $cancelledKotItem = collect($afterCancel['kots'])
             ->flatMap(fn (array $kot) => $kot['items'])
             ->firstWhere('order_item_id', $burgerLineId);
         $this->assertSame('CANCELLED', $cancelledKotItem['status']);
-        $this->assertSame('Guest changed mind', $cancelledKotItem['cancel_reason']);
-        $this->assertSame($manager->name, $cancelledKotItem['cancelled_by_name']);
+        $this->assertArrayNotHasKey('cancel_reason', $cancelledKotItem);
+        $this->assertArrayNotHasKey('cancelled_by', $cancelledKotItem);
+
+        $visibleItems = collect($this->actingAs($manager)->getJson('/api/v1/kots?include_completed=1')->assertOk()->json('data'))
+            ->flatMap(fn (array $kot) => $kot['items']);
+        $this->assertNull($visibleItems->firstWhere('order_item_id', $burgerLineId));
 
         $date = now('Asia/Dhaka')->format('Y-m-d');
         $supervisorReport = $this->actingAs($manager)
@@ -211,6 +216,13 @@ class KotPreparationTest extends TestCase
 
         $adminRole = Role::query()->create(['key' => 'admin', 'name' => 'Admin']);
         $manager->roles()->attach($adminRole);
+        $cancelledKotItem = collect($this->actingAs($manager)->getJson('/api/v1/kots?include_completed=1')->assertOk()->json('data'))
+            ->flatMap(fn (array $kot) => $kot['items'])
+            ->firstWhere('order_item_id', $burgerLineId);
+        $this->assertSame('CANCELLED', $cancelledKotItem['status']);
+        $this->assertSame('Guest changed mind', $cancelledKotItem['cancel_reason']);
+        $this->assertSame($manager->name, $cancelledKotItem['cancelled_by_name']);
+
         $adminReport = $this->actingAs($manager)
             ->getJson("/api/v1/reports/summary?from={$date}&to={$date}")
             ->assertOk()

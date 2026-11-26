@@ -283,7 +283,7 @@ export default function ReportsWorkspace({
             className={subTab === 'invoices' ? 'active' : ''}
             onClick={() => setSubTab('invoices')}
           >
-            🧾 Invoices, Refunds & Voids
+            🧾 Invoices & Refunds{canViewAllReportDates ? ' & Voids' : ''}
             {report && <span>{report.invoices.length}</span>}
           </button>
           {canViewAllReportDates && (
@@ -394,7 +394,8 @@ export default function ReportsWorkspace({
                   ৳{(Number(kpis.refunded_total) + Number(kpis.voided_total)).toFixed(0)}
                 </strong>
                 <p>
-                  Refunded ৳{Number(kpis.refunded_total).toFixed(0)} · {kpis.voided_invoices_count} Voided
+                  Refunded ৳{Number(kpis.refunded_total).toFixed(0)}
+                  {canViewAllReportDates && ` · ${kpis.voided_invoices_count} Voided`}
                 </p>
               </div>
             </article>

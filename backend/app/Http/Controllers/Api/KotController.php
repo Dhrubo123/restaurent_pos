@@ -38,11 +38,13 @@ class KotController extends Controller
         }
 
         $includeCompleted = $request->boolean('include_completed');
+        $hideCancelledHistory = $includeCompleted && ! $user->roles()->where('key', 'admin')->exists();
 
         $kots = Kot::query()
             ->where('restaurant_id', $user->restaurant_id)
             ->whereIn('station', $stations)
             ->when(! $includeCompleted, fn ($q) => $q->whereIn('status', Kot::ACTIVE_STATUSES))
+            ->when($hideCancelledHistory, fn ($q) => $q->where('status', '!=', 'CANCELLED'))
             ->with([
                 'order.table.zone:id,name',
                 'order.waiter:id,name',
@@ -362,6 +364,7 @@ class KotController extends Controller
     {
         $this->assertRestaurant($request, $kot);
         $user = $request->user();
+        abort_if($kot->status === 'CANCELLED' && ! $user->roles()->where('key', 'admin')->exists(), 404);
 
         $canReprint = $user->can('manage-floor')
             || $user->can('manage-menu')

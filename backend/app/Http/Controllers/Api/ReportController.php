@@ -23,10 +23,12 @@ class ReportController extends Controller
         $restaurantTimezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
 
         [$fromDate, $toDate] = $this->resolveDateRange($request, $restaurantTimezone);
+        $canViewVoids = $this->hasUnlimitedReportAccess($request);
 
         $invoices = Invoice::query()
             ->where('restaurant_id', $restaurantId)
             ->whereBetween('issued_at', [$fromDate, $toDate])
+            ->when(! $canViewVoids, fn ($query) => $query->where('status', '!=', 'VOIDED'))
             ->with(['items', 'refunds.processor:id,name'])
             ->latest('issued_at')
             ->get();
@@ -111,7 +113,7 @@ class ReportController extends Controller
             ->limit(50)
             ->get();
 
-        $voidedItems = $this->hasUnlimitedReportAccess($request)
+        $voidedItems = $canViewVoids
             ? $this->voidedItemLedger($restaurantId, $fromDate, $toDate)
             : [];
 
@@ -153,10 +155,12 @@ class ReportController extends Controller
         $restaurantTimezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
 
         [$fromDate, $toDate] = $this->resolveDateRange($request, $restaurantTimezone);
+        $canViewVoids = $this->hasUnlimitedReportAccess($request);
 
         $invoices = Invoice::query()
             ->where('restaurant_id', $restaurantId)
             ->whereBetween('issued_at', [$fromDate, $toDate])
+            ->when(! $canViewVoids, fn ($query) => $query->where('status', '!=', 'VOIDED'))
             ->orderBy('issued_at')
             ->get();
 
@@ -166,7 +170,7 @@ class ReportController extends Controller
             $toDate->copy()->setTimezone($restaurantTimezone)->format('Y-m-d'),
         );
 
-        return response()->streamDownload(function () use ($invoices) {
+        return response()->streamDownload(function () use ($invoices, $canViewVoids) {
             $out = fopen('php://output', 'w');
             fputcsv($out, [
                 'Invoice Number',
@@ -182,7 +186,7 @@ class ReportController extends Controller
                 'Billed Total (BDT)',
                 'Refunded (BDT)',
                 'Net Revenue (BDT)',
-                'Void Reason',
+                ...($canViewVoids ? ['Void Reason'] : []),
             ]);
 
             foreach ($invoices as $invoice) {
@@ -205,7 +209,7 @@ class ReportController extends Controller
                     $invoice->total,
                     $invoice->refunded_amount,
                     number_format($net, 2, '.', ''),
-                    $invoice->void_reason ?? '',
+                    ...($canViewVoids ? [$invoice->void_reason ?? ''] : []),
                 ]);
             }
 
@@ -234,7 +238,7 @@ class ReportController extends Controller
         if (! $this->hasUnlimitedReportAccess($request)) {
             $restaurantTimezone = $request->user()->restaurant?->timezone ?? 'Asia/Dhaka';
             $query->where('created_at', '>=', now($restaurantTimezone)->subDays(6)->startOfDay()->utc());
-            $query->where('action', '!=', 'order_item.sent_cancelled');
+            $query->whereNotIn('action', ['order_item.sent_cancelled', 'order.cancelled', 'invoice.voided']);
         }
 
         if ($actionFilter !== '') {

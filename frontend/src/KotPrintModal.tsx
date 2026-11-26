@@ -13,7 +13,7 @@ export type KotLineRecord = {
   note: string | null
   modifiers: { name: string; quantity: number }[]
   status: 'PENDING' | 'PREPARING' | 'READY' | 'SERVED' | 'CANCELLED'
-  cancel_reason: string | null
+  cancel_reason?: string | null
   cancelled_by_name?: string | null
 }
 
@@ -214,7 +214,7 @@ export default function KotPrintModal({ kots, busy, onClose, onReprint }: Props)
                             {item.note && <div className="kot-paper-note">* NOTE: {item.note}</div>}
                             {isCancelled && (
                               <div className="kot-paper-cancel-tag">
-                                [CANCELLED: {item.cancel_reason ?? 'Authorized void'}]
+                                [CANCELLED{item.cancel_reason ? `: ${item.cancel_reason}` : ''}]
                                 {item.cancelled_by_name && <div>Authorized by: {item.cancelled_by_name}</div>}
                               </div>
                             )}

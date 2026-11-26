@@ -160,7 +160,7 @@ export default function FoundationApp() {
       )
     : false
   const canCancelSentItems = canManageFloor || canManageMenu
-  const isOwnerAdmin = (user?.roles.includes('admin') ?? false) || (user?.permissions.includes('manage-security') ?? false)
+  const isOwnerAdmin = user?.roles.includes('admin') ?? false
 
   const refreshCsrf = async () => {
     const result = await request<{ token: string }>('/csrf-token')
@@ -986,7 +986,7 @@ export default function FoundationApp() {
     }
   }
 
-  const requestOrderBill = async (order: OrderRecord) => {
+  const requestOrderBill = async (order: OrderRecord, openGuestCopy = false) => {
     resetMessages()
     setBusy(true)
     try {
@@ -996,12 +996,22 @@ export default function FoundationApp() {
       })
       setSelectedOrder(result.data)
       setSuccess(`Bill requested for ${result.data.order_number}.`)
+      if (openGuestCopy) setPrintInvoice(buildGuestBillFromOrder(result.data))
       await Promise.all([loadFloor(), loadOrders(result.data.id)])
     } catch (caught) {
       handleFailure(caught)
     } finally {
       setBusy(false)
     }
+  }
+
+  const openGuestBill = (order: OrderRecord) => {
+    if (order.status === 'OPEN' && canManageOrders && isOnline) {
+      void requestOrderBill(order, true)
+      return
+    }
+
+    setPrintInvoice(buildGuestBillFromOrder(order))
   }
 
   const transferOrder = async (order: OrderRecord, toTableId: number, reason: string): Promise<boolean> => {
@@ -2038,7 +2048,7 @@ export default function FoundationApp() {
           onChargeOwner={chargeOrderToOwner}
           onPayOwnerInvoice={payOwnerInvoice}
           onViewInvoice={(inv) => setPrintInvoice(inv)}
-          onPrintGuestBill={(ord) => setPrintInvoice(buildGuestBillFromOrder(ord))}
+          onPrintGuestBill={openGuestBill}
         />
       ) : activeTab === 'kitchen' ? (
         <KotWorkspace
@@ -2115,7 +2125,7 @@ export default function FoundationApp() {
             onMergeOrder={mergeOrder}
             onCancelOrder={cancelOrder}
             onOpenCashier={canTakePayment ? () => { resetMessages(); setActiveTab('cashier'); void loadBillingData() } : undefined}
-            onPrintGuestBill={(ord) => setPrintInvoice(buildGuestBillFromOrder(ord))}
+            onPrintGuestBill={openGuestBill}
             onOpenTakeaway={canManageOrders ? openTakeawayOrder : undefined}
           />
         </>

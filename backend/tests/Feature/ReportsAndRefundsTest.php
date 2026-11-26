@@ -335,6 +335,7 @@ class ReportsAndRefundsTest extends TestCase
 
         $this->assertSame('VOIDED', $voided['status']);
         $this->assertSame('INV-0001', $voided['invoice_number']);
+        $this->assertArrayNotHasKey('void_reason', $voided);
 
         // Next invoice gets INV-0002 (never reuses INV-0001)
         $order2 = $this->actingAs($waiter)
@@ -357,16 +358,30 @@ class ReportsAndRefundsTest extends TestCase
 
         $this->assertSame('INV-0002', $invoice2['invoice_number']);
 
-        // Reports summary shows 1 active invoice, 1 voided invoice, and 1000.00 net revenue
         $summary = $this->actingAs($manager)
             ->getJson('/api/v1/reports/summary')
             ->assertOk()
             ->json('data');
 
         $this->assertSame(1, $summary['kpis']['invoices_count']);
-        $this->assertSame(1, $summary['kpis']['voided_invoices_count']);
+        $this->assertSame(0, $summary['kpis']['voided_invoices_count']);
         $this->assertSame('1000.00', $summary['kpis']['net_revenue']);
-        $this->assertSame('1000.00', $summary['kpis']['voided_total']);
+        $this->assertSame('0.00', $summary['kpis']['voided_total']);
+        $this->assertSame(['INV-0002'], array_column($summary['invoices'], 'invoice_number'));
+        $this->getJson('/api/v1/invoices')->assertOk()->assertJsonCount(1, 'data');
+        $this->getJson('/api/v1/audit-events?action=invoice.voided')->assertOk()->assertJsonCount(0, 'data');
+        $csv = $this->get('/api/v1/reports/export')->assertOk()->streamedContent();
+        $this->assertStringNotContainsString('INV-0001', $csv);
+        $this->assertStringNotContainsString('Void Reason', $csv);
+        $this->postJson("/api/v1/invoices/{$invoice['id']}/reprint", ['reason' => 'Copy'])->assertNotFound();
+
+        $manager->roles()->attach(Role::query()->firstOrCreate(['key' => 'admin'], ['name' => 'Admin']));
+        $this->getJson('/api/v1/reports/summary')
+            ->assertOk()
+            ->assertJsonPath('data.kpis.voided_invoices_count', 1)
+            ->assertJsonPath('data.kpis.voided_total', '1000.00');
+        $adminCsv = $this->get('/api/v1/reports/export')->assertOk()->streamedContent();
+        $this->assertStringContainsString('Entered on wrong table and settled by mistake', $adminCsv);
 
         // Audit trail logs invoice.voided with reason
         $audit = $this->actingAs($manager)

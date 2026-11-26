@@ -35,7 +35,7 @@ class OwnerMealController extends Controller
             $user->can('manage-orders') || $user->can('manage-floor') || $user->can('manage-menu') || $user->roles()->where('key', 'admin')->exists(),
             403,
         );
-        $isAdmin = $user->roles()->where('key', 'admin')->exists() || $user->can('manage-security');
+        $isAdmin = $user->roles()->where('key', 'admin')->exists();
 
         $restaurant = Restaurant::query()->findOrFail($user->restaurant_id);
         $tz = $restaurant->timezone ?? 'Asia/Dhaka';

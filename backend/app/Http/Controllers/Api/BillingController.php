@@ -184,6 +184,8 @@ class BillingController extends Controller
                 $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
 
                 if (in_array($lockedOrder->status, ['PAID', 'OWNER_DUE'], true) && $lockedOrder->invoice) {
+                    abort_if($lockedOrder->invoice->status === 'VOIDED' && ! $user->roles()->where('key', 'admin')->exists(), 404);
+
                     return response()->json([
                         'data' => $this->loadOrderWithBilling($lockedOrder),
                         'invoice' => $lockedOrder->invoice->load('items'),
@@ -326,6 +328,7 @@ class BillingController extends Controller
         );
         $invoices = Invoice::query()
             ->where('restaurant_id', $user->restaurant_id)
+            ->when(! $user->roles()->where('key', 'admin')->exists(), fn ($query) => $query->where('status', '!=', 'VOIDED'))
             ->with(['items', 'refunds.processor:id,name'])
             ->latest('issued_at')
             ->limit(50)
@@ -404,6 +407,7 @@ class BillingController extends Controller
     {
         Gate::authorize('take-payment');
         abort_unless($invoice->restaurant_id === $request->user()->restaurant_id, 404);
+        abort_if($invoice->status === 'VOIDED' && ! $request->user()->roles()->where('key', 'admin')->exists(), 404);
 
         $validated = $request->validate([
             'reason' => ['required', 'string', 'min:3', 'max:500'],
@@ -487,6 +491,10 @@ class BillingController extends Controller
                 ['status' => 'VOIDED', 'invoice_number' => $lockedInvoice->invoice_number],
                 trim($validated['reason']),
             );
+
+            if (! $user->roles()->where('key', 'admin')->exists()) {
+                return response()->json(['data' => $lockedInvoice->only(['id', 'invoice_number', 'status'])]);
+            }
 
             return response()->json([
                 'data' => $lockedInvoice->fresh()->load(['items', 'refunds.processor:id,name']),

@@ -44,6 +44,7 @@ class OrderController extends Controller
     {
         Gate::authorize('manage-orders');
         $this->assertRestaurant($request, $order);
+        abort_if($order->status === 'CANCELLED' && ! $request->user()->roles()->where('key', 'admin')->exists(), 404);
 
         return response()->json(['data' => $this->loadOrderDetails($order)]);
     }

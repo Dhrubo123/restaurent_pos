@@ -73,6 +73,7 @@ class InventoryController extends Controller
 
         $movements = StockMovement::query()
             ->where('restaurant_id', $restaurantId)
+            ->when(! $request->user()->roles()->where('key', 'admin')->exists(), fn ($query) => $query->where('type', '!=', 'VOID_RETURN'))
             ->with(['inventoryItem:id,sku,name,unit', 'actor:id,name'])
             ->latest('occurred_at')
             ->limit(80)
