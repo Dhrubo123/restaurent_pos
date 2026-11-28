@@ -427,6 +427,10 @@ export function buildGuestBillFromOrder(order: OrderRecord): InvoiceRecord {
 
 type CopyMode = 'CUSTOMER' | 'COUNTER' | 'BOTH'
 
+function receiptStaffName(name: string | null, fallback: string): string {
+  return name?.trim().toLowerCase() === 'local manager' ? 'Apurbo' : name ?? fallback
+}
+
 type Props = {
   restaurantName: string
   invoice: InvoiceRecord
@@ -570,7 +574,6 @@ export default function InvoicePrintModal({
                   <strong className="kot-paper-table">
                     {invoice.table_code} ({invoice.table_name})
                   </strong>
-                  <span className="kot-paper-sub">Guests: {invoice.guest_count}</span>
                 </div>
                 <div className="kot-paper-right">
                   <strong className="kot-paper-number">{invoice.invoice_number}</strong>
@@ -582,8 +585,8 @@ export default function InvoicePrintModal({
 
               <div className="kot-paper-meta">
                 <div>
-                  <span>Waiter: {invoice.waiter_name ?? 'Staff'}</span>
-                  <span>Cashier: {invoice.cashier_name ?? (isProformaBill ? 'Pending' : 'Cashier')}</span>
+                  <span>Waiter: {receiptStaffName(invoice.waiter_name, 'Staff')}</span>
+                  <span>Cashier: {receiptStaffName(invoice.cashier_name, isProformaBill ? 'Pending' : 'Cashier')}</span>
                 </div>
                 <div>
                   <span>Date: {new Date(invoice.issued_at).toLocaleDateString()}</span>
