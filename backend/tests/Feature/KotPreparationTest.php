@@ -14,6 +14,7 @@ use App\Models\Role;
 use App\Models\User;
 use App\Models\Zone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class KotPreparationTest extends TestCase
@@ -85,6 +86,30 @@ class KotPreparationTest extends TestCase
         $this->assertCount(1, $send2->json('kots.0.items'));
         $this->assertSame('Masala Tea', $send2->json('kots.0.items.0.item_name'));
         $this->assertSame(3, Kot::query()->count());
+    }
+
+    public function test_regular_and_owner_meal_tickets_share_the_sequence_after_existing_tickets(): void
+    {
+        [$waiter, , $restaurant, $table, , $cola] = $this->kotSetup();
+        $items = [['menu_item_id' => $cola->id, 'quantity' => 1]];
+
+        $this->actingAs($waiter)->postJson('/api/v1/owner-meals', ['items' => $items])
+            ->assertCreated()->assertJsonPath('kots.0.kot_number', 'KOT-0001');
+
+        Kot::query()->where('restaurant_id', $restaurant->id)->update(['kot_number' => 'KOT-10000']);
+        DB::table('pos_document_counters')->where('restaurant_id', $restaurant->id)->delete();
+
+        $order = $this->postJson("/api/v1/tables/{$table->id}/orders", ['guest_count' => 1])
+            ->assertCreated()->json('data');
+        $order = $this->postJson("/api/v1/orders/{$order['id']}/items", $items[0] + [
+            'version' => $order['version'],
+        ])->assertCreated()->json('data');
+
+        $this->postJson("/api/v1/orders/{$order['id']}/send", ['version' => $order['version']])
+            ->assertCreated()->assertJsonPath('kots.0.kot_number', 'KOT-10001');
+        $this->postJson('/api/v1/owner-meals', ['items' => $items])
+            ->assertCreated()->assertJsonPath('kots.0.kot_number', 'KOT-10002');
+        $this->assertDatabaseHas('kots', ['restaurant_id' => $restaurant->id, 'kot_number' => 'KOT-10000']);
     }
 
     public function test_kitchen_and_bar_station_isolation_price_free_kots_and_status_transitions(): void

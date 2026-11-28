@@ -15,6 +15,7 @@ use App\Support\Audit;
 use App\Support\Idempotency;
 use App\Support\InventoryStock;
 use App\Support\OrderTotals;
+use App\Support\PosDocumentNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -223,7 +224,7 @@ class BillingController extends Controller
 
                 $lockedOrder->loadMissing(['table', 'waiter', 'items.modifiers', 'payments']);
 
-                $invoiceNumber = $this->allocateInvoiceNumber($user->restaurant_id);
+                $invoiceNumber = PosDocumentNumber::Invoice->next($user->restaurant_id);
                 $capturedPayments = $lockedOrder->payments()->where('status', 'CAPTURED')->orderBy('id')->get();
 
                 $tenderedCash = (float) $capturedPayments
@@ -315,7 +316,7 @@ class BillingController extends Controller
                     'data' => $this->loadOrderWithBilling($lockedOrder->fresh()),
                     'invoice' => $invoice->load('items'),
                 ], 201);
-            });
+            }, attempts: 5);
         });
     }
 
@@ -538,7 +539,7 @@ class BillingController extends Controller
                     ->latest('opened_at')
                     ->first();
 
-                $refundNumber = $this->allocateRefundNumber($user->restaurant_id);
+                $refundNumber = PosDocumentNumber::Refund->next($user->restaurant_id);
 
                 $refund = Refund::query()->create([
                     'restaurant_id' => $user->restaurant_id,
@@ -592,7 +593,7 @@ class BillingController extends Controller
                     'data' => $lockedInvoice->fresh()->load(['items', 'refunds.processor:id,name']),
                     'refund' => $refund->load('processor:id,name'),
                 ], 201);
-            });
+            }, attempts: 5);
         });
     }
 
@@ -703,32 +704,6 @@ class BillingController extends Controller
 
         $expected = round((float) $shift->opening_float + $cashSales - $cashRefunds, 2);
         $shift->update(['expected_cash' => number_format($expected, 2, '.', '')]);
-    }
-
-    private function allocateInvoiceNumber(int $restaurantId): string
-    {
-        $next = Invoice::query()->where('restaurant_id', $restaurantId)->count() + 1;
-        $invoiceNumber = sprintf('INV-%04d', $next);
-
-        while (Invoice::query()->where('restaurant_id', $restaurantId)->where('invoice_number', $invoiceNumber)->exists()) {
-            $next++;
-            $invoiceNumber = sprintf('INV-%04d', $next);
-        }
-
-        return $invoiceNumber;
-    }
-
-    private function allocateRefundNumber(int $restaurantId): string
-    {
-        $next = Refund::query()->where('restaurant_id', $restaurantId)->count() + 1;
-        $refundNumber = sprintf('REF-%04d', $next);
-
-        while (Refund::query()->where('restaurant_id', $restaurantId)->where('refund_number', $refundNumber)->exists()) {
-            $next++;
-            $refundNumber = sprintf('REF-%04d', $next);
-        }
-
-        return $refundNumber;
     }
 
     private function loadOrderWithBilling(Order $order): Order

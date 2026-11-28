@@ -21,6 +21,7 @@ use App\Support\Audit;
 use App\Support\InventoryStock;
 use App\Support\KotPresenter;
 use App\Support\OrderTotals;
+use App\Support\PosDocumentNumber;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -422,7 +423,7 @@ class OwnerMealController extends Controller
                     continue;
                 }
 
-                $kotNumber = $this->allocateKotNumber($restaurantId);
+                $kotNumber = PosDocumentNumber::KitchenTicket->next($restaurantId);
 
                 $kot = Kot::query()->create([
                     'restaurant_id' => $restaurantId,
@@ -482,19 +483,6 @@ class OwnerMealController extends Controller
                 'kots' => $createdKots,
                 'summary' => $this->index($request)->getData(true)['data'],
             ], 201);
-        });
-    }
-
-    private function allocateKotNumber(int $restaurantId): string
-    {
-        $next = Kot::query()->where('restaurant_id', $restaurantId)->count() + 1;
-        $kotNumber = sprintf('KOT-%04d', $next);
-
-        while (Kot::query()->where('restaurant_id', $restaurantId)->where('kot_number', $kotNumber)->exists()) {
-            $next++;
-            $kotNumber = sprintf('KOT-%04d', $next);
-        }
-
-        return $kotNumber;
+        }, attempts: 5);
     }
 }

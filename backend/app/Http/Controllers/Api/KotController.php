@@ -14,6 +14,7 @@ use App\Support\Audit;
 use App\Support\Idempotency;
 use App\Support\InventoryStock;
 use App\Support\KotPresenter;
+use App\Support\PosDocumentNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -133,7 +134,7 @@ class KotController extends Controller
                         continue;
                     }
 
-                    $kotNumber = $this->allocateKotNumber($restaurantId);
+                    $kotNumber = PosDocumentNumber::KitchenTicket->next($restaurantId);
 
                     $kot = Kot::query()->create([
                         'restaurant_id' => $restaurantId,
@@ -212,7 +213,7 @@ class KotController extends Controller
                     'data' => $this->loadOrderWithKots($lockedOrder->fresh()),
                     'kots' => $createdKots,
                 ], 201);
-            });
+            }, attempts: 5);
         });
     }
 
@@ -395,19 +396,6 @@ class KotController extends Controller
         );
 
         return response()->json(['data' => KotPresenter::toArray($kot->fresh())]);
-    }
-
-    private function allocateKotNumber(int $restaurantId): string
-    {
-        $next = Kot::query()->where('restaurant_id', $restaurantId)->count() + 1;
-        $kotNumber = sprintf('KOT-%04d', $next);
-
-        while (Kot::query()->where('restaurant_id', $restaurantId)->where('kot_number', $kotNumber)->exists()) {
-            $next++;
-            $kotNumber = sprintf('KOT-%04d', $next);
-        }
-
-        return $kotNumber;
     }
 
     private function loadOrderWithKots(Order $order): Order
