@@ -106,11 +106,7 @@ class ReportsAndRefundsTest extends TestCase
             'menu_item_id' => $steak->id,
             'quantity' => 1,
         ])->assertCreated()->json('data');
-        $ownerInvoiceId = $this->actingAs($manager)->withHeader('Idempotency-Key', 'report-owner-charge')
-            ->postJson("/api/v1/orders/{$ownerOrder['id']}/checkout", [
-                'version' => $ownerOrder['version'],
-                'charge_to_owner' => true,
-            ])->assertCreated()->json('invoice.id');
+        $ownerInvoiceId = $this->createLegacyOwnerInvoice($ownerOrder['id'])->id;
         $this->actingAs($cashier)->withHeader('Idempotency-Key', 'report-owner-payment')
             ->postJson("/api/v1/owner-account/invoices/{$ownerInvoiceId}/payments", [
                 'method' => 'CASH',

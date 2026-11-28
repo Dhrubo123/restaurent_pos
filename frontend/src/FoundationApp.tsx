@@ -321,7 +321,7 @@ export default function FoundationApp() {
     }
   }
 
-  const bootstrapUser = async (currentUser: User) => {
+  const bootstrapUser = async (currentUser: User, openTab?: typeof activeTab) => {
     const hasFloor = currentUser.permissions.includes('view-floor')
     const manageFloor = currentUser.permissions.includes('manage-floor')
     const manageOrders = currentUser.permissions.includes('manage-orders')
@@ -333,17 +333,17 @@ export default function FoundationApp() {
     if (hasFloor) tasks.push(loadFloor(manageFloor))
     if (manageOrders || takePayment) tasks.push(loadOrders())
     if (takePayment) tasks.push(loadBillingData())
-    if (viewReports) tasks.push(loadReports(), loadAuditEvents())
-    if (manageMenu || manageFloor) tasks.push(loadInventory())
-    if (manageOrders || manageFloor || manageMenu) tasks.push(loadOwnerMeals())
-    if (currentUser.roles.includes('admin')) tasks.push(loadStaff())
+    if (openTab === 'reports' && viewReports) tasks.push(loadReports(), loadAuditEvents())
+    if (openTab === 'inventory' && (manageMenu || manageFloor)) tasks.push(loadInventory())
+    if (openTab === 'owner' && (manageOrders || manageFloor || manageMenu)) tasks.push(loadOwnerMeals())
+    if (openTab === 'staff' && currentUser.roles.includes('admin')) tasks.push(loadStaff())
 
     const hasKots = ['manage-orders', 'manage-kitchen', 'manage-bar', 'manage-floor', 'manage-menu', 'view-floor'].some(
       (p) => currentUser.permissions.includes(p),
     )
     if (hasKots) tasks.push(loadKots(false))
 
-    if (!hasFloor) {
+    if (!openTab && !hasFloor) {
       setActiveTab(takePayment ? 'cashier' : hasKots ? 'kitchen' : 'menu')
     }
     await Promise.all(tasks)
@@ -355,7 +355,7 @@ export default function FoundationApp() {
       setError('')
       setSuccess('Wi-Fi connection restored. Syncing live POS data…')
       if (user) {
-        void bootstrapUser(user).catch(() => {})
+        void bootstrapUser(user, activeTab).catch(() => {})
       }
     }
     const handleOffline = () => {
@@ -367,7 +367,7 @@ export default function FoundationApp() {
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
     }
-  }, [user])
+  }, [user, activeTab])
 
   useEffect(() => {
     if (!user) return
@@ -1306,27 +1306,6 @@ export default function FoundationApp() {
     }
   }
 
-  const chargeOrderToOwner = async (order: OrderRecord): Promise<boolean> => {
-    resetMessages()
-    setBusy(true)
-    try {
-      const result = await request<{ invoice: InvoiceRecord }>(`/orders/${order.id}/checkout`, csrfToken, {
-        method: 'POST',
-        headers: { 'Idempotency-Key': `owner-charge-${order.id}-${Date.now()}` },
-        body: JSON.stringify({ version: order.version, charge_to_owner: true }),
-      })
-      setPrintInvoice(result.invoice)
-      setSuccess(`${result.invoice.invoice_number} charged to the owner account.`)
-      await Promise.all([loadFloor(), loadOrders(), loadBillingData()])
-      return true
-    } catch (caught) {
-      handleFailure(caught)
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const payOwnerInvoice = async (
     invoice: InvoiceRecord,
     payload: { method: 'CASH' | 'CARD' | 'BKASH' | 'NAGAD'; amount: number; tendered_amount?: number; provider_reference?: string },
@@ -2034,7 +2013,6 @@ export default function FoundationApp() {
           recentShifts={recentShifts}
           recentInvoices={recentInvoices}
           ownerInvoices={ownerInvoices}
-          canChargeOwner={canManageFloor}
           canApproveShift={canManageFloor || canManageMenu}
           busy={busy}
           onSelectOrder={selectOrderById}
@@ -2045,7 +2023,6 @@ export default function FoundationApp() {
           onRemoveDiscount={removeOrderDiscount}
           onRecordPayment={recordOrderPayment}
           onCheckoutOrder={checkoutOrder}
-          onChargeOwner={chargeOrderToOwner}
           onPayOwnerInvoice={payOwnerInvoice}
           onViewInvoice={(inv) => setPrintInvoice(inv)}
           onPrintGuestBill={openGuestBill}

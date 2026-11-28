@@ -64,6 +64,12 @@ final class ReceiptRenderer implements AutoCloseable {
           .thermal-print-root .kot-paper-colhead,
           .thermal-print-root .kot-paper-line-row { grid-template-columns: 60px minmax(0, 1fr); }
           .thermal-print-root .kot-paper-item-name,
+          .thermal-print-root .receipt-line-row .kot-paper-item-body > strong {
+            min-width: 0;
+            font-size: 30px !important;
+            line-height: 1.2;
+            overflow-wrap: break-word;
+          }
           .thermal-print-root .kot-paper-qty { font-size: 23px; }
         </style>
         """;

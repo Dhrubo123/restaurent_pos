@@ -122,7 +122,7 @@ class BillingAndShiftsTest extends TestCase
         $this->assertSame(1, Invoice::query()->count());
     }
 
-    public function test_owner_account_charge_releases_table_and_later_cash_payment_clears_due(): void
+    public function test_new_owner_account_charge_is_rejected_and_legacy_invoice_can_be_paid(): void
     {
         [$waiter, $cashier, $manager, , $table, $steak] = $this->billingSetup();
         $order = $this->actingAs($waiter)
@@ -134,22 +134,15 @@ class BillingAndShiftsTest extends TestCase
             'quantity' => 1,
         ])->assertCreated()->json('data');
 
-        $this->actingAs($cashier)->postJson("/api/v1/orders/{$order['id']}/checkout", [
-            'version' => $order['version'],
-            'charge_to_owner' => true,
-        ])->assertForbidden();
-
-        $charge = $this->actingAs($manager)->withHeader('Idempotency-Key', 'owner-charge-1')
+        $this->actingAs($manager)->withHeader('Idempotency-Key', 'owner-charge-1')
             ->postJson("/api/v1/orders/{$order['id']}/checkout", [
                 'version' => $order['version'],
                 'charge_to_owner' => true,
-            ])->assertCreated();
-        $this->assertSame('OWNER_DUE', $charge->json('data.status'));
-        $this->assertSame('1000.00', $charge->json('invoice.total'));
-        $this->assertSame('0.00', $charge->json('invoice.paid_amount'));
-        $this->assertNull($table->fresh()->openOrder());
+            ])->assertUnprocessable()->assertJsonValidationErrors('charge_to_owner');
+        $this->assertDatabaseMissing('invoices', ['order_id' => $order['id']]);
+        $this->assertSame($order['id'], $table->fresh()->openOrder()?->id);
 
-        $invoiceId = $charge->json('invoice.id');
+        $invoiceId = $this->createLegacyOwnerInvoice($order['id'])->id;
         $this->actingAs($cashier)->postJson('/api/v1/shifts/open', ['opening_float' => 500])->assertCreated();
         $this->actingAs($cashier)->withHeader('Idempotency-Key', 'owner-pay-1')
             ->postJson("/api/v1/owner-account/invoices/{$invoiceId}/payments", [

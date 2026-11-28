@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class BillingController extends Controller
 {
@@ -170,15 +171,15 @@ class BillingController extends Controller
             'provider_reference' => ['sometimes', 'nullable', 'string', 'max:120'],
         ]);
 
+        if ($validated['charge_to_owner'] ?? false) {
+            throw ValidationException::withMessages([
+                'charge_to_owner' => 'Use Owner Meal to record a new owner order.',
+            ]);
+        }
+
         return Idempotency::handle($request, "orders.{$order->id}.checkout", function () use ($request, $user, $order, $validated) {
             return DB::transaction(function () use ($request, $user, $order, $validated) {
-                $chargeToOwner = (bool) ($validated['charge_to_owner'] ?? false);
-                if ($chargeToOwner) {
-                    Gate::authorize('manage-floor');
-                }
-                $shift = $chargeToOwner && empty($validated['method'])
-                    ? null
-                    : $this->requireOpenShift($user);
+                $shift = $this->requireOpenShift($user);
 
                 /** @var Order $lockedOrder */
                 $lockedOrder = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
@@ -215,7 +216,7 @@ class BillingController extends Controller
                 );
 
                 abort_if(
-                    ! $chargeToOwner && (float) $lockedOrder->balance_due > 0.001,
+                    (float) $lockedOrder->balance_due > 0.001,
                     409,
                     "Cannot finalize invoice while a balance of ৳{$lockedOrder->balance_due} remains unpaid.",
                 );
@@ -234,8 +235,7 @@ class BillingController extends Controller
                     'restaurant_id' => $user->restaurant_id,
                     'order_id' => $lockedOrder->id,
                     'invoice_number' => $invoiceNumber,
-                    'status' => $chargeToOwner && (float) $lockedOrder->balance_due > 0.001 ? 'OWNER_DUE' : 'ISSUED',
-                    'owner_account' => $chargeToOwner,
+                    'status' => 'ISSUED',
                     'guest_count' => $lockedOrder->guest_count,
                     'table_code' => $lockedOrder->table?->code ?? 'TBL',
                     'table_name' => $lockedOrder->table?->display_name ?? 'Table',
@@ -300,7 +300,7 @@ class BillingController extends Controller
                 }
 
                 $lockedOrder->update([
-                    'status' => $chargeToOwner && (float) $lockedOrder->balance_due > 0.001 ? 'OWNER_DUE' : 'PAID',
+                    'status' => 'PAID',
                     'closed_at' => now(),
                     'version' => $lockedOrder->version + 1,
                 ]);

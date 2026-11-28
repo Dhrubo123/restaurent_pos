@@ -421,10 +421,10 @@
 }
 .kot-paper-items{display:grid;gap:9px;padding:9px 0}
 .kot-paper-line{display:grid;gap:3px}
-.kot-paper-line-row{display:grid;grid-template-columns:34px 1fr;gap:0}
+.kot-paper-line-row{display:grid;grid-template-columns:34px minmax(0,1fr);gap:0}
 .kot-paper-qty{font-size:13px}
 .kot-paper-item-body{display:grid;gap:2px}
-.kot-paper-item-name{font-size:13px;line-height:1.2}
+.kot-paper-item-name{min-width:0;font-size:17px;line-height:1.2;overflow-wrap:break-word}
 .kot-paper-mods{margin:1px 0 0;padding-left:14px;font-size:10px}
 .kot-paper-note{font-size:10px;font-weight:700}
 .kot-line-cancelled .kot-paper-qty,.kot-line-cancelled .kot-paper-item-name{text-decoration:line-through;opacity:.7}
@@ -638,10 +638,12 @@
   }
 }
 .receipt-colhead{
-  grid-template-columns:32px 1fr 72px;
+  display:grid;
+  grid-template-columns:32px minmax(0,1fr) 72px;
 }
 .receipt-line-row{
-  grid-template-columns:32px 1fr 72px;
+  display:grid;
+  grid-template-columns:32px minmax(0,1fr) 72px;
   align-items:start;
 }
 .receipt-line-row .kot-paper-item-body,

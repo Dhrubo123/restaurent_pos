@@ -151,6 +151,7 @@ final class UsbReceiptPrinter implements AutoCloseable {
             write(printerConnection, new byte[]{0x1B, 0x40});
             int printableWidth = Math.min(PAPER_WIDTH_DOTS, bitmap.getWidth());
             int widthBytes = (printableWidth + 7) / 8;
+            int[] pixels = new int[printableWidth * Math.min(RASTER_BAND_HEIGHT, printHeight)];
             for (int top = 0; top < printHeight; top += RASTER_BAND_HEIGHT) {
                 int bandHeight = Math.min(RASTER_BAND_HEIGHT, printHeight - top);
                 ByteArrayOutputStream band = new ByteArrayOutputStream(8 + widthBytes * bandHeight);
@@ -162,7 +163,8 @@ final class UsbReceiptPrinter implements AutoCloseable {
                 band.write((widthBytes >> 8) & 0xFF);
                 band.write(bandHeight & 0xFF);
                 band.write((bandHeight >> 8) & 0xFF);
-                appendRasterData(band, bitmap, top, bandHeight, printableWidth, widthBytes);
+                bitmap.getPixels(pixels, 0, printableWidth, 0, top, printableWidth, bandHeight);
+                appendRasterData(band, pixels, bandHeight, printableWidth, widthBytes);
                 write(printerConnection, band.toByteArray());
             }
             write(printerConnection, new byte[]{0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00});
@@ -173,20 +175,18 @@ final class UsbReceiptPrinter implements AutoCloseable {
 
     private void appendRasterData(
         ByteArrayOutputStream output,
-        Bitmap bitmap,
-        int top,
+        int[] pixels,
         int bandHeight,
         int width,
         int widthBytes
     ) {
-        int[] pixels = new int[width];
         for (int row = 0; row < bandHeight; row++) {
-            bitmap.getPixels(pixels, 0, width, 0, top + row, width, 1);
+            int rowOffset = row * width;
             for (int byteIndex = 0; byteIndex < widthBytes; byteIndex++) {
                 int packed = 0;
                 for (int bit = 0; bit < 8; bit++) {
                     int x = byteIndex * 8 + bit;
-                    if (x < width && isBlack(pixels[x])) {
+                    if (x < width && isBlack(pixels[rowOffset + x])) {
                         packed |= 1 << (7 - bit);
                     }
                 }

@@ -321,6 +321,16 @@ export default function OrderWorkspace({
     [selectedOrder],
   )
 
+  const quantityByMenuItem = useMemo(() => {
+    const quantities = new Map<number, number>()
+    for (const line of activeItems) {
+      if (line.menu_item_id === null) continue
+      const quantity = Math.max(0, Number(line.quantity) - Number(line.cancelled_quantity))
+      quantities.set(line.menu_item_id, (quantities.get(line.menu_item_id) ?? 0) + quantity)
+    }
+    return quantities
+  }, [activeItems])
+
   const unsentCount = useMemo(
     () =>
       activeItems.reduce((sum, line) => {
@@ -449,9 +459,7 @@ export default function OrderWorkspace({
             <div className="pos-item-grid">
               {visibleMenuItems.map((item) => {
                 const hasCustom = item.variants.length > 0 || item.modifier_groups.length > 0
-                const inCheckQty = activeItems
-                  .filter((line) => line.menu_item_id === item.id)
-                  .reduce((sum, line) => sum + Math.max(0, Number(line.quantity) - Number(line.cancelled_quantity)), 0)
+                const inCheckQty = quantityByMenuItem.get(item.id) ?? 0
                 return (
                   <button
                     key={item.id}

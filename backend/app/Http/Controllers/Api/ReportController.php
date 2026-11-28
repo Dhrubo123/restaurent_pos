@@ -214,7 +214,7 @@ class ReportController extends Controller
             }
 
             fputcsv($out, []);
-            fputcsv($out, ['Report Footer', 'Developed by Tech Base', 'Generated At', now()->toIso8601String()]);
+            fputcsv($out, ['Report Footer', 'Powered by Clique IT', 'Generated At', now()->toIso8601String()]);
 
             fclose($out);
         }, $filename, [

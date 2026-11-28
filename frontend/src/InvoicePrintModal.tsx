@@ -63,6 +63,9 @@ function buildIntegratedPrinterDocument(paperWrapEl: HTMLElement, title: string)
       padding-top: 24px !important;
       border-top: 2px dashed #000 !important;
     }
+    .thermal-print-root .kot-paper-item-name {
+      font-size: 30px !important;
+    }
   </style>
 </head>
 <body><div class="thermal-print-root">${paperWrapEl.innerHTML}</div></body>
@@ -237,12 +240,12 @@ export function printThermalPaper(paperWrapEl: HTMLElement | null, docTitle = 'C
     .kot-paper-colhead { grid-template-columns: 34px 1fr; }
     .kot-paper-items { display: grid; gap: 7px; padding: 7px 0; }
     .kot-paper-line { display: grid; gap: 2px; }
-    .kot-paper-line-row { display: grid; grid-template-columns: 34px 1fr; }
-    .receipt-line-row { display: grid; grid-template-columns: 32px 1fr 68px; align-items: start; }
+    .kot-paper-line-row { display: grid; grid-template-columns: 34px minmax(0, 1fr); }
+    .receipt-line-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 68px; align-items: start; }
     .receipt-line-row .kot-paper-item-body { min-width: 0; overflow-wrap: anywhere; }
     .kot-paper-qty { font-size: 13px; }
     .kot-paper-item-body { display: grid; gap: 2px; }
-    .kot-paper-item-name { font-size: 13px; line-height: 1.2; }
+    .kot-paper-item-name { min-width: 0; font-size: 17px; line-height: 1.2; overflow-wrap: break-word; }
     .kot-paper-mods { margin: 1px 0 0; padding-left: 14px; font-size: 10px; }
     .kot-paper-note { font-size: 10px; font-weight: 700; }
     .kot-line-cancelled { text-decoration: line-through; opacity: 0.65; }
@@ -604,7 +607,7 @@ export default function InvoicePrintModal({
                     <div className="receipt-line-row">
                       <strong>{Number(item.quantity)}x</strong>
                       <div className="kot-paper-item-body">
-                        <strong>
+                        <strong className="kot-paper-item-name">
                           {item.item_name}
                           {item.variant_name ? ` (${item.variant_name})` : ''}
                         </strong>

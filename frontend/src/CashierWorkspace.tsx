@@ -34,7 +34,6 @@ type Props = {
   recentShifts: CashierShiftRecord[]
   recentInvoices: InvoiceRecord[]
   ownerInvoices: InvoiceRecord[]
-  canChargeOwner: boolean
   canApproveShift: boolean
   busy: boolean
   onSelectOrder: (orderId: number) => Promise<void>
@@ -66,7 +65,6 @@ type Props = {
       provider_reference?: string
     },
   ) => Promise<boolean>
-  onChargeOwner: (order: OrderRecord) => Promise<boolean>
   onPayOwnerInvoice: (
     invoice: InvoiceRecord,
     payload: { method: 'CASH' | 'CARD' | 'BKASH' | 'NAGAD'; amount: number; tendered_amount?: number; provider_reference?: string },
@@ -83,7 +81,6 @@ export default function CashierWorkspace({
   recentShifts,
   recentInvoices,
   ownerInvoices,
-  canChargeOwner,
   canApproveShift,
   busy,
   onSelectOrder,
@@ -94,7 +91,6 @@ export default function CashierWorkspace({
   onRemoveDiscount,
   onRecordPayment,
   onCheckoutOrder,
-  onChargeOwner,
   onPayOwnerInvoice,
   onViewInvoice,
   onPrintGuestBill,
@@ -613,7 +609,7 @@ export default function CashierWorkspace({
                 <div className="ticket-actions">
                   <div className="alert" style={{ margin: 0 }}>
                     <span>
-                      Open a cashier shift to receive payment. You can charge this bill to the owner account below without opening a shift.
+                      Open a cashier shift to receive payment.
                     </span>
                   </div>
                   <button
@@ -833,16 +829,6 @@ export default function CashierWorkspace({
                     </button>
                   </div>
                 </form>
-              )}
-              {canChargeOwner && balanceDue > 0 && (
-                <button
-                  type="button"
-                  className="secondary ticket-primary-cta"
-                  disabled={busy || activeItems.length === 0}
-                  onClick={() => void onChargeOwner(selectedOrder)}
-                >
-                  Charge ৳{balanceDue.toFixed(2)} to Owner Account & Release Table
-                </button>
               )}
             </>
           )}

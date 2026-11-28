@@ -25,7 +25,8 @@ import android.widget.Toast;
 public final class MainActivity extends Activity {
     private static final String PREFS = "clique_pos";
     private static final String PREF_SERVER_URL = "server_url";
-    private static final String DEFAULT_SERVER_URL = "https://demo.famousshoesbd.com/";
+    private static final String DEFAULT_SERVER_URL = "https://pos.cliquecafe.net/";
+    private static final String PREVIOUS_SERVER_URL = "https://demo.famousshoesbd.com";
     private static final int MENU_RELOAD = 1;
     private static final int MENU_TEST_PRINTER = 2;
     private static final int MENU_SERVER = 3;
@@ -52,6 +53,10 @@ public final class MainActivity extends Activity {
         setContentView(content);
 
         String savedUrl = preferences().getString(PREF_SERVER_URL, DEFAULT_SERVER_URL);
+        if (PREVIOUS_SERVER_URL.equalsIgnoreCase(savedUrl) || (PREVIOUS_SERVER_URL + "/").equalsIgnoreCase(savedUrl)) {
+            savedUrl = DEFAULT_SERVER_URL;
+            preferences().edit().putString(PREF_SERVER_URL, savedUrl).apply();
+        }
         if (savedUrl == null || savedUrl.trim().isEmpty()) {
             posWebView.loadUrl(DEFAULT_SERVER_URL);
         } else {
@@ -147,7 +152,7 @@ public final class MainActivity extends Activity {
         EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setHint("http://192.168.68.10");
-        input.setText(preferences().getString(PREF_SERVER_URL, ""));
+        input.setText(preferences().getString(PREF_SERVER_URL, DEFAULT_SERVER_URL));
         input.setSelectAllOnFocus(true);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
