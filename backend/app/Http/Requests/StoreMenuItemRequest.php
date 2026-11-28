@@ -39,7 +39,7 @@ class StoreMenuItemRequest extends FormRequest
                     ->where('active', true),
             ],
             'sku' => [
-                'required',
+                'nullable',
                 'string',
                 'max:40',
                 Rule::unique('menu_items')->where('restaurant_id', $restaurantId),
@@ -65,7 +65,7 @@ class StoreMenuItemRequest extends FormRequest
             ],
             'variants' => ['sometimes', 'array'],
             'variants.*.sku' => [
-                'required_with:variants',
+                'nullable',
                 'string',
                 'max:40',
                 'distinct',
@@ -102,9 +102,12 @@ class StoreMenuItemRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         $normalized = [
-            'sku' => Str::upper($this->string('sku')->trim()->toString()),
             'name' => $this->string('name')->trim()->toString(),
         ];
+
+        if ($this->filled('sku')) {
+            $normalized['sku'] = Str::upper($this->string('sku')->trim()->toString());
+        }
 
         if ($this->has('station')) {
             $normalized['station'] = Str::upper($this->string('station')->trim()->toString());

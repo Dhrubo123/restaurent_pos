@@ -29,7 +29,7 @@ class MenuItemController extends Controller
                 'menu_category_id' => $data['menu_category_id'],
                 'menu_subcategory_id' => $data['menu_subcategory_id'] ?? null,
                 'tax_category_id' => $data['tax_category_id'] ?? null,
-                'sku' => $data['sku'],
+                'sku' => $data['sku'] ?? 'MENU-'.Str::ulid(),
                 'name' => $data['name'],
                 'description' => $data['description'] ?? null,
                 'image_path' => $data['image_path'] ?? null,
@@ -50,7 +50,9 @@ class MenuItemController extends Controller
                 $variant = ItemVariant::query()->create([
                     'restaurant_id' => $restaurantId,
                     'menu_item_id' => $item->id,
-                    'sku' => Str::upper(trim($variantData['sku'])),
+                    'sku' => isset($variantData['sku'])
+                        ? Str::upper(trim($variantData['sku']))
+                        : 'VAR-'.Str::ulid(),
                     'name' => trim($variantData['name']),
                     'price' => $variantData['price'],
                     'sort_order' => $index + 1,
@@ -229,15 +231,17 @@ class MenuItemController extends Controller
 
         foreach ($variants as $index => $variantData) {
             $variantId = isset($variantData['id']) ? (int) $variantData['id'] : null;
-            $sku = Str::upper(trim((string) $variantData['sku']));
+            $sku = isset($variantData['sku']) ? Str::upper(trim($variantData['sku'])) : null;
             $name = trim((string) $variantData['name']);
 
-            $duplicateSku = ItemVariant::query()
-                ->where('restaurant_id', $restaurantId)
-                ->where('sku', $sku)
-                ->when($variantId, fn ($query) => $query->whereKeyNot($variantId))
-                ->exists();
-            abort_if($duplicateSku, 422, "Variant SKU {$sku} is already in use.");
+            if ($sku !== null) {
+                $duplicateSku = ItemVariant::query()
+                    ->where('restaurant_id', $restaurantId)
+                    ->where('sku', $sku)
+                    ->when($variantId, fn ($query) => $query->whereKeyNot($variantId))
+                    ->exists();
+                abort_if($duplicateSku, 422, "Variant SKU {$sku} is already in use.");
+            }
 
             if ($variantId) {
                 $variant = ItemVariant::query()
@@ -248,7 +252,7 @@ class MenuItemController extends Controller
                 $oldPrice = (string) $variant->price;
                 $newPrice = number_format((float) $variantData['price'], 2, '.', '');
                 $variant->update([
-                    'sku' => $sku,
+                    'sku' => $sku ?? $variant->sku,
                     'name' => $name,
                     'price' => $newPrice,
                     'sort_order' => $variantData['sort_order'] ?? ($index + 1),
@@ -263,7 +267,7 @@ class MenuItemController extends Controller
                 $variant = ItemVariant::query()->create([
                     'restaurant_id' => $restaurantId,
                     'menu_item_id' => $menuItem->id,
-                    'sku' => $sku,
+                    'sku' => $sku ?? 'VAR-'.Str::ulid(),
                     'name' => $name,
                     'price' => $variantData['price'],
                     'sort_order' => $variantData['sort_order'] ?? ($index + 1),

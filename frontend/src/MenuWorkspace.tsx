@@ -151,7 +151,6 @@ type ItemDraft = {
   menu_category_id: string
   menu_subcategory_id: string
   tax_category_id: string
-  sku: string
   name: string
   description: string
   image_path: string
@@ -175,7 +174,6 @@ type CategoryDraft = {
 
 type VariantDraft = {
   id?: number
-  sku: string
   name: string
   price: string
   active: boolean
@@ -303,7 +301,6 @@ export default function MenuWorkspace({
       menu_category_id: String(firstActiveCategory?.id ?? ''),
       menu_subcategory_id: '',
       tax_category_id: String(taxCategories[0]?.id ?? ''),
-      sku: '',
       name: '',
       description: '',
       image_path: '',
@@ -324,7 +321,6 @@ export default function MenuWorkspace({
       menu_category_id: String(item.menu_category_id),
       menu_subcategory_id: item.menu_subcategory_id ? String(item.menu_subcategory_id) : '',
       tax_category_id: item.tax_category_id ? String(item.tax_category_id) : '',
-      sku: item.sku,
       name: item.name,
       description: item.description ?? '',
       image_path: item.image_path ?? '',
@@ -337,7 +333,6 @@ export default function MenuWorkspace({
       sort_order: item.sort_order ?? 0,
       variants: item.variants.map((variant) => ({
         id: variant.id,
-        sku: variant.sku,
         name: variant.name,
         price: variant.price,
         active: variant.active,
@@ -356,7 +351,6 @@ export default function MenuWorkspace({
       menu_category_id: Number(itemDraft.menu_category_id),
       menu_subcategory_id: itemDraft.menu_subcategory_id ? Number(itemDraft.menu_subcategory_id) : null,
       tax_category_id: itemDraft.tax_category_id ? Number(itemDraft.tax_category_id) : null,
-      sku: itemDraft.sku,
       name: itemDraft.name,
       description: itemDraft.description || null,
       image_path: itemDraft.image_path.trim() || null,
@@ -710,19 +704,6 @@ export default function MenuWorkspace({
                 </select>
                 <FieldError errors={fieldErrors.station} />
               </label>
-            </div>
-
-            <div className="field-row">
-              <label>
-                SKU
-                <input
-                  required
-                  placeholder="BRG-01"
-                  value={itemDraft.sku}
-                  onChange={(e) => setItemDraft({ ...itemDraft, sku: e.target.value.toUpperCase() })}
-                />
-                <FieldError errors={fieldErrors.sku} />
-              </label>
 
               <label>
                 Price (BDT ৳)
@@ -869,15 +850,10 @@ export default function MenuWorkspace({
               <p className="muted">A variant price replaces the base item price for that order line.</p>
               <div className="variant-editor-list">
                 {itemDraft.variants.map((variant, index) => (
-                  <div className="variant-editor-row" key={variant.id ?? `new-${index}`}>
+                  <div className="variant-editor-row menu-variant-row" key={variant.id ?? `new-${index}`}>
                     <input required placeholder="Regular" value={variant.name} onChange={(e) => {
                       const variants = [...itemDraft.variants]
                       variants[index] = { ...variant, name: e.target.value }
-                      setItemDraft({ ...itemDraft, variants })
-                    }} />
-                    <input required placeholder="SKU" value={variant.sku} onChange={(e) => {
-                      const variants = [...itemDraft.variants]
-                      variants[index] = { ...variant, sku: e.target.value.toUpperCase() }
                       setItemDraft({ ...itemDraft, variants })
                     }} />
                     <input required type="number" min="0" step="0.01" placeholder="Price" value={variant.price} onChange={(e) => {
@@ -896,7 +872,7 @@ export default function MenuWorkspace({
               </div>
               <button type="button" className="secondary compact" onClick={() => setItemDraft({
                 ...itemDraft,
-                variants: [...itemDraft.variants, { name: '', sku: '', price: itemDraft.price || '0', active: true, available: true, sort_order: itemDraft.variants.length + 1 }],
+                variants: [...itemDraft.variants, { name: '', price: itemDraft.price || '0', active: true, available: true, sort_order: itemDraft.variants.length + 1 }],
               })}>＋ Add size / variant</button>
             </div>
 

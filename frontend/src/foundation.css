@@ -64,6 +64,7 @@
 }
 .variant-editor-list{display:grid;gap:9px;margin:12px 0}
 .variant-editor-row{display:grid;grid-template-columns:1.1fr .9fr .75fr auto auto;gap:8px;align-items:center;padding:9px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.menu-variant-row{grid-template-columns:minmax(0,1.1fr) minmax(0,.75fr) auto auto}
 .variant-editor-row input{width:100%;min-width:0;height:40px;padding:0 9px;border:1px solid #dce4df;border-radius:8px;background:#fff;color:var(--ink)}
 .variant-editor-row .checkbox-pill{min-height:40px;padding:6px 8px;white-space:nowrap}
 .variant-editor-row .danger-link{min-height:40px;padding:0 9px;border:1px solid #f1d3ca;border-radius:8px;font-size:.75rem;font-weight:700}

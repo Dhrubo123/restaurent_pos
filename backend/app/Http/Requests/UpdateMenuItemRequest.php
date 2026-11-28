@@ -78,7 +78,7 @@ class UpdateMenuItemRequest extends FormRequest
             ],
             'variants' => ['sometimes', 'array'],
             'variants.*.id' => ['nullable', 'integer'],
-            'variants.*.sku' => ['required_with:variants', 'string', 'max:40', 'distinct'],
+            'variants.*.sku' => ['nullable', 'string', 'max:40', 'distinct'],
             'variants.*.name' => ['required_with:variants', 'string', 'max:80', 'distinct'],
             'variants.*.price' => ['required_with:variants', 'numeric', 'min:0', 'max:9999999.99'],
             'variants.*.available' => ['sometimes', 'boolean'],

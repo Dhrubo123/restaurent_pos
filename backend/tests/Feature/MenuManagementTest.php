@@ -66,6 +66,46 @@ class MenuManagementTest extends TestCase
         ]);
     }
 
+    public function test_menu_item_and_variants_can_be_saved_without_skus(): void
+    {
+        [$manager] = $this->menuUser(['manage-menu']);
+        $categoryId = $this->actingAs($manager)->postJson('/api/v1/menu/categories', [
+            'name' => 'Drinks',
+            'default_station' => 'BAR',
+        ])->assertCreated()->json('data.id');
+
+        $item = $this->postJson('/api/v1/menu/items', [
+            'menu_category_id' => $categoryId,
+            'name' => 'Iced Coffee',
+            'station' => 'BAR',
+            'price' => 200,
+            'variants' => [
+                ['name' => 'Regular', 'price' => 200],
+                ['name' => 'Large', 'price' => 250],
+            ],
+        ])->assertCreated()->json('data');
+
+        $this->assertMatchesRegularExpression('/^MENU-[0-9A-HJKMNP-TV-Z]{26}$/', $item['sku']);
+        $regular = $item['variants'][0];
+        $large = $item['variants'][1];
+        $this->assertMatchesRegularExpression('/^VAR-[0-9A-HJKMNP-TV-Z]{26}$/', $regular['sku']);
+        $this->assertNotSame($regular['sku'], $large['sku']);
+
+        $updated = $this->patchJson("/api/v1/menu/items/{$item['id']}", [
+            'name' => 'Cold Coffee',
+            'variants' => [
+                ['id' => $regular['id'], 'name' => 'Medium', 'price' => 200],
+                ['id' => $large['id'], 'name' => 'Large', 'price' => 250],
+                ['name' => 'Extra Large', 'price' => 300],
+            ],
+        ])->assertOk()->assertJsonPath('data.sku', $item['sku'])->json('data');
+
+        $variantsByName = collect($updated['variants'])->keyBy('name');
+        $this->assertSame($regular['sku'], $variantsByName['Medium']['sku']);
+        $this->assertSame($large['sku'], $variantsByName['Large']['sku']);
+        $this->assertMatchesRegularExpression('/^VAR-[0-9A-HJKMNP-TV-Z]{26}$/', $variantsByName['Extra Large']['sku']);
+    }
+
     public function test_changing_item_price_requires_reason_and_records_non_overlapping_price_history(): void
     {
         [$manager, $restaurant] = $this->menuUser(['manage-menu']);
